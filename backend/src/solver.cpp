@@ -182,7 +182,14 @@ double ShockSolver::computeTimestep() const {
     double speed = std::abs(u_[i]) + a;
     max_speed = std::max(max_speed, speed);
   }
-  return cfg_.CFL * dx_ / max_speed;
+  
+  // MUSCL needs lower CFL for stability (second-order extrapolation)
+  double effective_cfl = cfg_.CFL;
+  if (scheme_type_ == "muscl") {
+    effective_cfl = std::min(cfg_.CFL, 0.5);
+  }
+  
+  return effective_cfl * dx_ / max_speed;
 }
 
 void ShockSolver::step() {
@@ -209,7 +216,16 @@ void ShockSolver::run() {
   std::cout << "Running ShockSolver with " << scheme_type_
             << " scheme and " << solver_type_ << " Riemann solver\n";
   std::cout << "Grid: " << cfg_.numCells << " cells, dx = " << dx_ << " m\n";
-  std::cout << "CFL = " << cfg_.CFL << ", gamma = " << cfg_.gamma << "\n\n";
+  
+  double effective_cfl = cfg_.CFL;
+  if (scheme_type_ == "muscl") {
+    effective_cfl = std::min(cfg_.CFL, 0.5);
+  }
+  std::cout << "CFL = " << effective_cfl;
+  if (scheme_type_ == "muscl" && cfg_.CFL > 0.5) {
+    std::cout << " (capped from " << cfg_.CFL << " for MUSCL stability)";
+  }
+  std::cout << ", gamma = " << cfg_.gamma << "\n\n";
 
   while (t_ < cfg_.endTime) {
     step();
@@ -261,6 +277,13 @@ void ShockSolver::computeFluxes(std::vector<double>& F_rho,
                   F_rho[i], F_rhou[i], F_E[i]);
     }
   } else if (scheme_type_ == "muscl") {
+    // MUSCL-Hancock: reconstruct, then evolve by dt/2, then solve Riemann
+    double dt = computeTimestep();
+    if (t_ + dt > cfg_.endTime) {
+      dt = cfg_.endTime - t_;
+    }
+    double dtdx = dt / dx_;
+    
     for (int i = 0; i <= cfg_.numCells; ++i) {
       double rho_L, u_L, p_L, rho_R, u_R, p_R;
 
@@ -268,16 +291,73 @@ void ShockSolver::computeFluxes(std::vector<double>& F_rho,
         rho_L = rho_[0];
         u_L = u_[0];
         p_L = p_[0];
-        reconstructMUSCL(0, rho_R, u_R, p_R, rho_R, u_R, p_R);
+        rho_R = rho_[0];
+        u_R = u_[0];
+        p_R = p_[0];
       } else if (i == cfg_.numCells) {
-        reconstructMUSCL(cfg_.numCells - 1, rho_L, u_L, p_L, rho_L, u_L, p_L);
+        rho_L = rho_[cfg_.numCells - 1];
+        u_L = u_[cfg_.numCells - 1];
+        p_L = p_[cfg_.numCells - 1];
         rho_R = rho_[cfg_.numCells - 1];
         u_R = u_[cfg_.numCells - 1];
         p_R = p_[cfg_.numCells - 1];
       } else {
-        double rho_L_left, u_L_left, p_L_left;
+        // Interface i sits between cell i-1 and cell i
+        // Left state = RIGHT edge of cell i-1
+        // Right state = LEFT edge of cell i
+        double rho_L_left, u_L_left, p_L_left;   // left edge of cell i-1
+        double rho_R_right, u_R_right, p_R_right; // right edge of cell i
+        
+        // Get both edges of cell i-1
         reconstructMUSCL(i - 1, rho_L_left, u_L_left, p_L_left, rho_L, u_L, p_L);
-        reconstructMUSCL(i, rho_R, u_R, p_R, rho_R, u_R, p_R);
+        
+        // Get both edges of cell i
+        reconstructMUSCL(i, rho_R, u_R, p_R, rho_R_right, u_R_right, p_R_right);
+        
+        // MUSCL-Hancock predictor: evolve edge states by dt/2
+        // Using primitive variable formulation - compute all changes first, then apply
+        
+        // For cell i-1: evolve the RIGHT edge state
+        {
+          double drho = rho_L - rho_L_left;  // slope across cell i-1
+          double du = u_L - u_L_left;
+          double dp = p_L - p_L_left;
+          
+          // Compute changes (using original values)
+          double d_rho = -0.5 * dtdx * (u_L * drho + rho_L * du);
+          double d_u = -0.5 * dtdx * (u_L * du + dp / rho_L);
+          double d_p = -0.5 * dtdx * (u_L * dp + cfg_.gamma * p_L * du);
+          
+          // Apply all at once
+          rho_L += d_rho;
+          u_L += d_u;
+          p_L += d_p;
+          
+          // Ensure positivity
+          rho_L = std::max(rho_L, 1e-10);
+          p_L = std::max(p_L, 1e-10);
+        }
+        
+        // For cell i: evolve the LEFT edge state
+        {
+          double drho = rho_R_right - rho_R;  // slope across cell i
+          double du = u_R_right - u_R;
+          double dp = p_R_right - p_R;
+          
+          // Compute changes (using original values)
+          double d_rho = -0.5 * dtdx * (u_R * drho + rho_R * du);
+          double d_u = -0.5 * dtdx * (u_R * du + dp / rho_R);
+          double d_p = -0.5 * dtdx * (u_R * dp + cfg_.gamma * p_R * du);
+          
+          // Apply all at once
+          rho_R += d_rho;
+          u_R += d_u;
+          p_R += d_p;
+          
+          // Ensure positivity
+          rho_R = std::max(rho_R, 1e-10);
+          p_R = std::max(p_R, 1e-10);
+        }
       }
 
       solveRiemann(rho_L, u_L, p_L, rho_R, u_R, p_R,
@@ -698,6 +778,180 @@ std::vector<ShockSolver::SensorReading> ShockSolver::getSensorReadings() const {
 }
 
 /**
+ * Sparse Initialization - Reconstruct field from limited sensor data
+ */
+
+/**
+ * Reference corresponding Toro test at t = 0
+ */
+std::vector<ShockSolver::SparseDataPoint> ShockSolver::getSensorDataForToroTest(
+  ToroTest test,
+  const std::vector<double>& sensor_positions) {
+  
+  double rho_L, u_L, p_L, rho_R, u_R, p_R, x_diaphragm;
+
+  switch (test) {
+    case ToroTest::TEST1_SOD:
+      rho_L = 1.0; u_L = 0.0; p_L = 1.0;
+      rho_R = 0.125; u_R = 0.0; p_R = 0.1;
+      x_diaphragm = 0.5;
+      break;
+      
+    case ToroTest::TEST2_123:
+      rho_L = 1.0; u_L = -2.0; p_L = 0.4;
+      rho_R = 1.0; u_R = 2.0; p_R = 0.4;
+      x_diaphragm = 0.5;
+      break;
+      
+    case ToroTest::TEST3_BLAST_LEFT:
+      rho_L = 1.0; u_L = 0.0; p_L = 1000.0;
+      rho_R = 1.0; u_R = 0.0; p_R = 0.01;
+      x_diaphragm = 0.5;
+      break;
+      
+    case ToroTest::TEST4_COLLISION:
+      rho_L = 5.99924; u_L = 19.5975; p_L = 460.894;
+      rho_R = 5.99242; u_R = -6.19633; p_R = 46.0950;
+      x_diaphragm = 0.4;
+      break;
+      
+    case ToroTest::TEST5_STATIONARY:
+      rho_L = 1.0; u_L = -19.59745; p_L = 1000.0;
+      rho_R = 1.0; u_R = -19.59745; p_R = 0.01;
+      x_diaphragm = 0.8;
+      break;
+      
+    default:
+      rho_L = 1.0; u_L = 0.0; p_L = 1.0;
+      rho_R = 0.125; u_R = 0.0; p_R = 0.1;
+      x_diaphragm = 0.5;
+  }
+
+  std::vector<SparseDataPoint> sensor_data;
+
+  for (double x : sensor_positions) {
+    SparseDataPoint point;
+    point.x = x;
+
+    if (x < x_diaphragm) {
+      point.rho = rho_L;
+      point.u = u_L;
+      point.p = p_L;
+    } else {
+      point.rho = rho_R;
+      point.u = u_R;
+      point.p = p_R;
+    }
+
+    sensor_data.push_back(point);
+  }
+
+  return sensor_data;
+}
+
+/**
+ * Initialize from sparse sensor data using Interp methods
+ */
+void ShockSolver::initializeFromSparseData(
+  const std::vector<SparseDataPoint>& sparse_data,
+  const std::string& interpolation_method) {
+  
+  if (sparse_data.empty()) {
+    throw std::runtime_error("No sparse data provided");
+  } 
+
+  // Sort by position
+  std::vector<SparseDataPoint> sorted_data = sparse_data;
+  std::sort(sorted_data.begin(), sorted_data.end(),
+            [](const SparseDataPoint& a, const SparseDataPoint& b) {
+              return a.x < b.x;
+            });
+  
+  // Store for validation - estimate diaphragm position from data
+  // Find where biggest density jump is
+  double max_jump = 0.0;
+  double estimated_diaphragm = 0.5;
+  for (size_t i = 0; i < sorted_data.size() - 1; ++i) {
+    double jump = std::abs(sorted_data[i + 1].rho - sorted_data[i].rho);
+    if (jump > max_jump) {
+      max_jump = jump;
+      estimated_diaphragm = 0.5 * (sorted_data[i].x + sorted_data[i + 1].x);
+    }
+  }
+
+  // Store initial conditions for analytical solution comparison
+  // Use first and last sensor as left/right states
+  initial_conditions_.rho_L = sorted_data.front().rho;
+  initial_conditions_.rho_R = sorted_data.back().rho;
+  initial_conditions_.u_L = sorted_data.front().u;
+  initial_conditions_.u_R = sorted_data.back().u;
+  initial_conditions_.p_L = sorted_data.front().p;
+  initial_conditions_.p_R = sorted_data.back().p;
+  initial_conditions_.x_diaphragm = estimated_diaphragm;
+  initial_conditions_.is_valid = true;
+
+  std::cout << "Initializing from " << sparse_data.size() << " sparse data points" << std::endl;
+  std::cout << "Interpolation Method: " << interpolation_method << std::endl;
+  std::cout << "Estimated diaphragm position: " << estimated_diaphragm << std::endl;
+
+  // Interpolate to fill cells
+  for (int i = 0; i < cfg_.numCells; ++i) {
+    double x = x_[i];
+
+    // Find bracketing points
+    if (x <= sorted_data.front().x) {
+      // Extrapolate from first point
+      rho_[i] = sorted_data.front().rho;
+      u_[i] = sorted_data.front().u;
+      p_[i] = sorted_data.front().p;
+    } else if (x >= sorted_data.back().x) {
+      // Extrapolate from last point
+      rho_[i] = sorted_data.back().rho;
+      u_[i] = sorted_data.back().u;
+      p_[i] = sorted_data.back().p;
+    } else {
+      // Find bracketing sensors
+      size_t left_idx = 0;
+      for (size_t j = 0; j < sorted_data.size() - 1; ++j) {
+        if (x >= sorted_data[j].x && x < sorted_data[j + 1].x) {
+          left_idx = j;
+          break;
+        }
+      }
+
+      const SparseDataPoint& left = sorted_data[left_idx];
+      const SparseDataPoint& right = sorted_data[left_idx + 1];
+
+      if (interpolation_method == "piecewise_constant") {
+        // Use nearest neighbor (left point for tie)
+        double mid = 0.5 * (left.x + right.x);
+        if (x < mid) {
+          rho_[i] = left.rho;
+          u_[i] = left.u;
+          p_[i] = left.p; 
+        } else {
+          rho_[i] = right.rho;
+          u_[i] = right.u;
+          p_[i] = right.p;
+        }
+      } else {
+        // Linear interpolation (default)
+        double t = (x - left.x) / (right.x - left.x);
+        rho_[i] = left.rho + t * (right.rho - left.rho);
+        u_[i] = left.u + t * (right.u - left.u);
+        p_[i] = left.p + t * (right.p - left.p);
+      }
+    }
+  }
+
+  primitivesToConservative();
+
+  std::cout << "Sparse initialization complete" << std::endl;
+}
+
+
+
+/**
  * VALIDATION FRAMEWORK - Analytical Solution Comparison
  * 
  * Based on Toro's "Riemann Solvers and Numerical Methods for Fluid Dynamics"
@@ -716,7 +970,7 @@ void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
   u_exact.resize(cfg_.numCells);
   p_exact.resize(cfg_.numCells);
 
-  // Extract initial condiitons
+  // Extract initial conditions
   double rho_L = initial_conditions_.rho_L;
   double u_L = initial_conditions_.u_L;
   double p_L = initial_conditions_.p_L;
@@ -729,7 +983,7 @@ void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
   double a_L = std::sqrt(cfg_.gamma * p_L / rho_L);
   double a_R = std::sqrt(cfg_.gamma * p_R / rho_R);
 
-  // Solver for star region (p*, u*)
+  // Solve for star region (p*, u*)
   double p_star = solvePressureStar(rho_L, u_L, p_L, a_L, rho_R, u_R, p_R, a_R);
 
   // Compute u_star using f functions
@@ -775,7 +1029,7 @@ void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
           p_sample = p_star;                     
         }                                     
       } else {
-        // Left rarefraction
+        // Left rarefaction
         double S_HL = u_L - a_L;
         if (S <= S_HL) {
           rho_sample = rho_L;
@@ -789,10 +1043,11 @@ void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
             u_sample = u_star;
             p_sample = p_star;
           } else {
-            // Inside rarefraction fan
+            // Inside rarefaction fan
             u_sample = 2.0 / (cfg_.gamma + 1.0) * (a_L + 0.5 * (cfg_.gamma - 1.0) * u_L + S);
             double c = 2.0 / (cfg_.gamma + 1.0) * (a_L + 0.5 * (cfg_.gamma - 1.0) * (u_L - S));
             rho_sample = rho_L * std::pow(c / a_L, 2.0 / (cfg_.gamma - 1.0));
+            p_sample = p_L * std::pow(c / a_L, 2.0 * cfg_.gamma / (cfg_.gamma - 1.0));
           }
         }
       }
@@ -813,7 +1068,7 @@ void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
           p_sample = p_star;
         }
       } else {
-        // Right rarefraction
+        // Right rarefaction
         double S_HR = u_R + a_R;
         if (S >= S_HR) {
           rho_sample = rho_R;
@@ -827,10 +1082,11 @@ void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
             u_sample = u_star;
             p_sample = p_star;
           } else {
-            // Inside rarefraction fan
+            // Inside rarefaction fan
             u_sample = 2.0 / (cfg_.gamma + 1.0) * (-a_R + 0.5 * (cfg_.gamma - 1.0) * u_R + S);
             double c = 2.0 / (cfg_.gamma + 1.0) * (a_R - 0.5 * (cfg_.gamma - 1.0) * (u_R - S));
-            rho_sample = rho_R * std::pow(c / a_R, 2.0 * cfg_.gamma / (cfg_.gamma - 1.0));
+            rho_sample = rho_R * std::pow(c / a_R, 2.0 / (cfg_.gamma - 1.0));
+            p_sample = p_R * std::pow(c / a_R, 2.0 * cfg_.gamma / (cfg_.gamma - 1.0));
           }
         }
       }
@@ -848,7 +1104,7 @@ void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
  * Compute L1, L2, and Linf error norms:
  * L1 (mean abs error): average error magnitude
  * L2 (RMS error): root-mean-square error
- * Linf (max error): worse-case pointwise error
+ * Linf (max error): worst-case pointwise error
  * 
  */
 ShockSolver::ValidationMetrics ShockSolver::validateAgainstAnalytical() const {
@@ -863,19 +1119,12 @@ ShockSolver::ValidationMetrics ShockSolver::validateAgainstAnalytical() const {
   double sum_u_L1 = 0.0, sum_u_L2 = 0.0, max_u = 0.0;
   double sum_p_L1 = 0.0, sum_p_L2 = 0.0, max_p = 0.0;
 
-  double max_rel_rho = 0.0, max_rel_u = 0.0, max_rel_p = 0.0;
-
   // Compute errors for each grid point
   for (int i = 0; i < cfg_.numCells; ++i) {
-    // Abs error
+    // Absolute errors
     double err_rho = std::abs(rho_[i] - rho_exact[i]);
     double err_u = std::abs(u_[i] - u_exact[i]);
     double err_p = std::abs(p_[i] - p_exact[i]);
-
-    // Relative errors (avoid division by very small)
-    double rel_rho = err_rho / (std::abs(rho_exact[i]) + TOL);
-    double rel_u = err_u / (std::abs(u_exact[i]) + TOL);
-    double rel_p = err_p / (std::abs(p_exact[i]) + TOL);
 
     // L1 norm (sum of abs errors)
     sum_rho_L1 += err_rho;
@@ -887,10 +1136,10 @@ ShockSolver::ValidationMetrics ShockSolver::validateAgainstAnalytical() const {
     sum_u_L2 += err_u * err_u;
     sum_p_L2 += err_p * err_p;
 
-    // Linf norm (max err)
-    max_rho = std::max(max_rho, err_rho);
-    max_u = std::max(max_u, err_u);
-    max_p = std::max(max_p, err_p);
+    // Linf norm (max absolute error)
+    if (err_rho > max_rho) { max_rho = err_rho; }
+    if (err_u > max_u) { max_u = err_u; }
+    if (err_p > max_p) { max_p = err_p; }
   }
 
   // Normalize by number of cells 
@@ -903,9 +1152,9 @@ ShockSolver::ValidationMetrics ShockSolver::validateAgainstAnalytical() const {
   metrics.L2_error_velocity = std::sqrt(sum_u_L2 / N);
   metrics.L2_error_pressure = std::sqrt(sum_p_L2 / N);
 
-  metrics.max_relative_error_density = max_rel_rho;
-  metrics.max_relative_error_velocity = max_rel_u;
-  metrics.max_relative_error_pressure = max_rel_p;
+  metrics.Linf_error_density = max_rho;
+  metrics.Linf_error_velocity = max_u;
+  metrics.Linf_error_pressure = max_p;
 
   metrics.num_points_validated = N;
 

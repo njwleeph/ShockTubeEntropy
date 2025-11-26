@@ -18,6 +18,13 @@ add_executable(shocktube
   src/solver.cpp
 )
 
+add_executable(solver_test
+  src/solver_test.cpp
+  src/solver.cpp
+)
+
+target_include_directories(solver_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
 target_include_directories(shocktube PRIVATE
   ${CMAKE_SOURCE_DIR}/include
 )

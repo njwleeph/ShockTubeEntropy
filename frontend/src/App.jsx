@@ -1,245 +1,193 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const ShockTubeViewer = () => {
-  const [data, setData] = useState(null);
-  const [status, setStatus] = useState({ initialized: false, running: false });
+const ShockTubeSimulator = () => {
+  const API_URL = 'http://localhost:8080';
+
+  // Simulation config
   const [config, setConfig] = useState({
-    length: 1.0,
     numCells: 1000,
     gamma: 1.4,
     CFL: 0.9,
     endTime: 0.2,
-    scheme: 'godunov',
+    scheme: 'muscl',
     riemannSolver: 'hllc',
-    rho_L: 1.0,
-    u_L: 0.0,
-    p_L: 1.0,
-    rho_R: 0.125,
-    u_R: 0.0,
-    p_R: 0.1,
-    x_diaphragm: 0.5
+    interpolation: 'piecewise_constant'
   });
-  const [simulationInfo, setSimulationInfo] = useState(null);
-  const [sensorPositions, setSensorPositions] = useState([0.1, 0.3, 0.5, 0.7, 0.9]);
-  const [sensorReadings, setSensorReadings] = useState(null);
-  const [selectedToroTest, setSelectedToroTest] = useState(1);
-  const [validationResults, setValidationResults] = useState(null);
 
+  // Toro test selection
+  const [selectedTest, setSelectedTest] = useState(1);
+
+  // Sensor data
+  const [sensors, setSensors] = useState([
+    { x: 0.10, rho: 1.0, u: 0.0, p: 1.0 },
+    { x: 0.25, rho: 1.0, u: 0.0, p: 1.0 },
+    { x: 0.40, rho: 1.0, u: 0.0, p: 1.0 },
+    { x: 0.60, rho: 0.125, u: 0.0, p: 0.1 },
+    { x: 0.75, rho: 0.125, u: 0.0, p: 0.1 },
+    { x: 0.90, rho: 0.125, u: 0.0, p: 0.1 }
+  ]);
+
+  // Results
+  const [numericalData, setNumericalData] = useState(null);
+  const [analyticalData, setAnalyticalData] = useState(null);
+  const [validationResults, setValidationResults] = useState(null);
+  const [status, setStatus] = useState({ ready: false, running: false });
+
+  // Canvas refs
   const densityCanvasRef = useRef(null);
   const velocityCanvasRef = useRef(null);
   const pressureCanvasRef = useRef(null);
   const entropyCanvasRef = useRef(null);
 
-  const API_URL = 'http://localhost:8080';
-
-  const fetchData = async () => {
+  // Load sensor data from Toro test
+  const loadToroTest = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/simulation/data`);
-      const jsonData = await response.json();
-      if (jsonData.success) {
-        setData(jsonData);
-      }
-    } catch (error) {
-      console.error('Error fetching data:', error);
-    }
-  };
-
-  const fetchStatus = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/simulation/status`);
-      const statusData = await response.json();
-      if (statusData.success) {
-        setSimulationInfo(statusData);
-      }
-    } catch (error) {
-      console.error('Error fetching status:', error);
-    }
-  };
-
-  const fetchValidation = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/simulation/validate`);
+      const positions = sensors.map(s => s.x);
+      const response = await fetch(`${API_URL}/api/toro/sensor-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ test: selectedTest, positions })
+      });
       const data = await response.json();
+      
       if (data.success) {
-        setValidationResults(data);
+        setSensors(data.sensors);
       }
     } catch (error) {
-      console.error('Error fetching validation:', error);
+      console.error('Error loading Toro test:', error);
     }
   };
 
-  const initializeSimulation = async () => {
-    try {
-      await fetch(`${API_URL}/api/simulation/reset`, { method: 'POST' });
-
-      await fetch(`${API_URL}/api/simulation/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          length: config.length,
-          numCells: config.numCells,
-          gamma: config.gamma,
-          CFL: config.CFL,
-          endTime: config.endTime
-        })
-      });
-
-      await fetch(`${API_URL}/api/simulation/configure`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scheme: config.scheme,
-          riemann_solver: config.riemannSolver
-        })
-      });
-
-      await fetch(`${API_URL}/api/simulation/init/shocktube`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rho_L: config.rho_L,
-          u_L: config.u_L,
-          p_L: config.p_L,
-          rho_R: config.rho_R,
-          u_R: config.u_R,
-          p_R: config.p_R,
-          x_diaphragm: config.x_diaphragm
-        })
-      });
-
-      setStatus({ initialized: true, running: false });
-      setValidationResults(null);
-      await fetchData();
-    } catch (error) {
-      console.error('Error initializing:', error);
-    }
-  };
-
-  const placeSensors = async () => {
-    try {
-      await fetch(`${API_URL}/api/simulation/sensors/place`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ positions: sensorPositions })
-      });
-      console.log('Sensors placed');
-    } catch (error) {
-      console.error('Error placing sensors:', error);
-    }
-  };
-
-  const fetchSensorReadings = async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/simulation/sensors/readings`);
-      const data = await response.json();
-      if (data.success) {
-        setSensorReadings(data);
-      }
-    } catch (error) {
-      console.error('Error fetching sensor readings:', error);
-    }
-  };
-
-  const initializeToroTest = async () => {
-    try {
-      await fetch(`${API_URL}/api/simulation/reset`, { method: 'POST' });
-
-      await fetch(`${API_URL}/api/simulation/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          length: config.length,
-          numCells: config.numCells,
-          gamma: config.gamma,
-          CFL: config.CFL,
-          endTime: config.endTime
-        })
-      });
-
-      await fetch(`${API_URL}/api/simulation/configure`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scheme: config.scheme,
-          riemann_solver: config.riemannSolver
-        })
-      });
-
-      await fetch(`${API_URL}/api/simulation/init/toro`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ test: selectedToroTest })
-      });
-
-      await placeSensors();
-
-      setStatus({ initialized: true, running: false });
-      setValidationResults(null);
-      await fetchData();
-    } catch (error) {
-      console.error('Error initializing Toro Test:', error);
-    }
-  };
-
+  // Run complete simulation
   const runSimulation = async () => {
     try {
-      setStatus(prev => ({ ...prev, running: true }));
+      setStatus({ ready: false, running: true });
+      setValidationResults(null);
 
-      const response = await fetch(`${API_URL}/api/simulation/run`, { method: 'POST' });
-      const result = await response.json();
+      // Reset
+      await fetch(`${API_URL}/api/simulation/reset`, { method: 'POST' });
 
-      if (result.success) {
-        setSimulationInfo(result);
-        await fetchData();
-        await fetchSensorReadings();
-        await fetchValidation();
+      // Create
+      await fetch(`${API_URL}/api/simulation/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          length: 1.0,
+          numCells: config.numCells,
+          gamma: config.gamma,
+          CFL: config.CFL,
+          endTime: config.endTime
+        })
+      });
+
+      // Configure
+      await fetch(`${API_URL}/api/simulation/configure`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scheme: config.scheme,
+          riemann_solver: config.riemannSolver
+        })
+      });
+
+      // Initialize from sparse data
+      await fetch(`${API_URL}/api/simulation/init/sparse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sensors: sensors,
+          interpolation: config.interpolation
+        })
+      });
+
+      // Run
+      await fetch(`${API_URL}/api/simulation/run`, { method: 'POST' });
+
+      // Get numerical solution
+      const numResponse = await fetch(`${API_URL}/api/simulation/data`);
+      const numData = await numResponse.json();
+      if (numData.success) {
+        setNumericalData(numData);
       }
 
-      setStatus(prev => ({ ...prev, running: false }));
+      // Get analytical solution
+      const anaResponse = await fetch(`${API_URL}/api/simulation/analytical`);
+      const anaData = await anaResponse.json();
+      if (anaData.success) {
+        setAnalyticalData(anaData);
+      }
+
+      // Get validation
+      const valResponse = await fetch(`${API_URL}/api/simulation/validate`);
+      const valData = await valResponse.json();
+      if (valData.success) {
+        setValidationResults(valData);
+      }
+
+      setStatus({ ready: true, running: false });
+
     } catch (error) {
       console.error('Error running simulation:', error);
-      setStatus(prev => ({ ...prev, running: false }));
+      setStatus({ ready: false, running: false });
     }
   };
 
-  useEffect(() => {
-    const checkHealth = async () => {
-      try {
-        await fetch(`${API_URL}/api/health`);
-      } catch (error) {
-        console.error('Cannot connect to API server');
-      }
-    };
-    checkHealth();
-  }, []);
+  // Add sensor
+  const addSensor = () => {
+    if (sensors.length >= 10) return;
+    const lastX = sensors.length > 0 ? sensors[sensors.length - 1].x : 0.5;
+    const newX = Math.min(0.95, lastX + 0.1);
+    setSensors([...sensors, { x: newX, rho: 0.5, u: 0.0, p: 0.5 }]);
+  };
 
-  const drawPlot = (canvasRef, xData, yData, ylabel, color) => {
+  // Remove sensor
+  const removeSensor = (index) => {
+    if (sensors.length <= 2) return;
+    setSensors(sensors.filter((_, i) => i !== index));
+  };
+
+  // Update sensor value
+  const updateSensor = (index, field, value) => {
+    const updated = [...sensors];
+    updated[index] = { ...updated[index], [field]: parseFloat(value) || 0 };
+    setSensors(updated);
+  };
+
+  // Draw comparison plot
+  const drawComparisonPlot = (canvasRef, xNum, yNum, xAna, yAna, ylabel, colorNum, colorAna) => {
     const canvas = canvasRef.current;
-    if (!canvas || !xData || !yData) return;
+    if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
-    canvas.width = 1000;
-    canvas.height = 250;
+    canvas.width = 900;
+    canvas.height = 280;
 
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const padding = { left: 60, right: 20, top: 20, bottom: 40 };
+    const padding = { left: 70, right: 120, top: 30, bottom: 50 };
     const plotWidth = canvas.width - padding.left - padding.right;
     const plotHeight = canvas.height - padding.top - padding.bottom;
 
-    const xMin = Math.min(...xData);
-    const xMax = Math.max(...xData);
-    const yMin = Math.min(...yData);
-    const yMax = Math.max(...yData);
+    // Combine data for axis scaling
+    const allY = [...(yNum || []), ...(yAna || [])];
+    const allX = [...(xNum || []), ...(xAna || [])];
+    
+    if (allY.length === 0) return;
 
+    const xMin = Math.min(...allX);
+    const xMax = Math.max(...allX);
+    const yMin = Math.min(...allY);
+    const yMax = Math.max(...allY);
     const xRange = xMax - xMin || 1;
     const yRange = yMax - yMin || 1;
+    const yPadding = yRange * 0.1;
 
     const xScale = (x) => padding.left + ((x - xMin) / xRange) * plotWidth;
-    const yScale = (y) => canvas.height - padding.bottom - ((y - yMin) / yRange) * plotHeight;
+    const yScale = (y) => canvas.height - padding.bottom - ((y - (yMin - yPadding)) / (yRange + 2 * yPadding)) * plotHeight;
 
-    ctx.strokeStyle = '#ddd';
+    // Grid lines
+    ctx.strokeStyle = '#e0e0e0';
     ctx.lineWidth = 1;
     for (let i = 0; i <= 5; i++) {
       const y = padding.top + (plotHeight / 5) * i;
@@ -249,47 +197,85 @@ const ShockTubeViewer = () => {
       ctx.stroke();
     }
 
-    ctx.strokeStyle = '#000';
+    // Axes
+    ctx.strokeStyle = '#333';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(padding.left, canvas.height - padding.bottom);
     ctx.lineTo(canvas.width - padding.right, canvas.height - padding.bottom);
     ctx.stroke();
-
     ctx.beginPath();
     ctx.moveTo(padding.left, padding.top);
     ctx.lineTo(padding.left, canvas.height - padding.bottom);
     ctx.stroke();
 
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(xScale(xData[0]), yScale(yData[0]));
-    for (let i = 1; i < xData.length; i++) {
-      ctx.lineTo(xScale(xData[i]), yScale(yData[i]));
+    // Draw analytical solution first (dashed, behind)
+    if (xAna && yAna && xAna.length > 0) {
+      ctx.strokeStyle = colorAna;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 4]);
+      ctx.beginPath();
+      ctx.moveTo(xScale(xAna[0]), yScale(yAna[0]));
+      for (let i = 1; i < xAna.length; i++) {
+        ctx.lineTo(xScale(xAna[i]), yScale(yAna[i]));
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-    ctx.stroke();
 
-    ctx.fillStyle = '#000';
-    ctx.font = 'bold 12px Arial';
+    // Draw numerical solution (solid, on top)
+    if (xNum && yNum && xNum.length > 0) {
+      ctx.strokeStyle = colorNum;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(xScale(xNum[0]), yScale(yNum[0]));
+      for (let i = 1; i < xNum.length; i++) {
+        ctx.lineTo(xScale(xNum[i]), yScale(yNum[i]));
+      }
+      ctx.stroke();
+    }
+
+    // Draw sensor positions
+    ctx.fillStyle = '#e74c3c';
+    for (const sensor of sensors) {
+      const sx = xScale(sensor.x);
+      ctx.beginPath();
+      ctx.moveTo(sx, padding.top);
+      ctx.lineTo(sx, canvas.height - padding.bottom);
+      ctx.strokeStyle = '#e74c3c';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      // Sensor marker
+      ctx.beginPath();
+      ctx.arc(sx, padding.top + 8, 5, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    // Axis labels
+    ctx.fillStyle = '#333';
+    ctx.font = 'bold 13px Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('Position (m)', canvas.width / 2, canvas.height - 5);
+    ctx.fillText('Position (m)', padding.left + plotWidth / 2, canvas.height - 10);
 
     ctx.save();
-    ctx.translate(15, canvas.height / 2);
+    ctx.translate(18, canvas.height / 2);
     ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = 'center';
     ctx.fillText(ylabel, 0, 0);
     ctx.restore();
 
+    // Y-axis values
     ctx.textAlign = 'right';
     ctx.font = '11px Arial';
     for (let i = 0; i <= 5; i++) {
-      const yVal = yMin + (yRange / 5) * i;
+      const yVal = (yMin - yPadding) + ((yRange + 2 * yPadding) / 5) * i;
       const y = canvas.height - padding.bottom - (plotHeight / 5) * i;
-      ctx.fillText(yVal.toFixed(3), padding.left - 5, y + 4);
+      ctx.fillText(yVal.toFixed(3), padding.left - 8, y + 4);
     }
 
+    // X-axis values
     ctx.textAlign = 'center';
     for (let i = 0; i <= 5; i++) {
       const xVal = xMin + (xRange / 5) * i;
@@ -297,322 +283,397 @@ const ShockTubeViewer = () => {
       ctx.fillText(xVal.toFixed(2), x, canvas.height - padding.bottom + 20);
     }
 
-    if (sensorPositions && sensorPositions.length > 0) {
-      ctx.fillStyle = '#ff0000';
-      ctx.strokeStyle = '#ff0000';
-      ctx.lineWidth = 2;
-
-      for (const sensorPos of sensorPositions) {
-        const x = xScale(sensorPos);
-
-        ctx.beginPath();
-        ctx.moveTo(x, padding.top);
-        ctx.lineTo(x, canvas.height - padding.bottom);
-        ctx.setLineDash([5, 5]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        ctx.beginPath();
-        ctx.arc(x, padding.top + 10, 5, 0, 2 * Math.PI);
-        ctx.fill();
-      }
-    }
+    // Legend
+    const legendX = canvas.width - padding.right + 15;
+    const legendY = padding.top + 20;
+    
+    ctx.font = 'bold 11px Arial';
+    ctx.textAlign = 'left';
+    
+    // Numerical
+    ctx.strokeStyle = colorNum;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(legendX, legendY);
+    ctx.lineTo(legendX + 25, legendY);
+    ctx.stroke();
+    ctx.fillStyle = '#333';
+    ctx.fillText('Numerical', legendX + 30, legendY + 4);
+    
+    // Analytical
+    ctx.strokeStyle = colorAna;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath();
+    ctx.moveTo(legendX, legendY + 25);
+    ctx.lineTo(legendX + 25, legendY + 25);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillText('Analytical', legendX + 30, legendY + 29);
+    
+    // Sensors
+    ctx.fillStyle = '#e74c3c';
+    ctx.beginPath();
+    ctx.arc(legendX + 12, legendY + 50, 5, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillStyle = '#333';
+    ctx.fillText('Sensors', legendX + 30, legendY + 54);
   };
 
+  // Compute entropy from primitive variables: s = ln(p / rho^gamma)
+  const computeEntropy = (pressure, density, gamma = 1.4) => {
+    if (!pressure || !density) return null;
+    return pressure.map((p, i) => {
+      const rho = density[i];
+      if (rho <= 0 || p <= 0) return 0;
+      return Math.log(p / Math.pow(rho, gamma));
+    });
+  };
+
+  // Redraw plots when data changes
   useEffect(() => {
-    if (!data) return;
-
-    drawPlot(densityCanvasRef, data.x, data.density, 'Density (kg/m³)', '#2563eb');
-    drawPlot(velocityCanvasRef, data.x, data.velocity, 'Velocity (m/s)', '#16a34a');
-    drawPlot(pressureCanvasRef, data.x, data.pressure, 'Pressure (Pa)', '#dc2626');
-    
-    if (data.entropy) {
-      drawPlot(entropyCanvasRef, data.x, data.entropy, 'Specific Entropy (J/kg·K)', '#9333ea');
+    if (numericalData || analyticalData) {
+      drawComparisonPlot(
+        densityCanvasRef,
+        numericalData?.x, numericalData?.density,
+        analyticalData?.x, analyticalData?.density,
+        'Density (kg/m³)', '#2563eb', '#94a3b8'
+      );
+      drawComparisonPlot(
+        velocityCanvasRef,
+        numericalData?.x, numericalData?.velocity,
+        analyticalData?.x, analyticalData?.velocity,
+        'Velocity (m/s)', '#16a34a', '#94a3b8'
+      );
+      drawComparisonPlot(
+        pressureCanvasRef,
+        numericalData?.x, numericalData?.pressure,
+        analyticalData?.x, analyticalData?.pressure,
+        'Pressure (Pa)', '#dc2626', '#94a3b8'
+      );
+      
+      // Compute analytical entropy from analytical p and rho
+      const analyticalEntropy = computeEntropy(
+        analyticalData?.pressure, 
+        analyticalData?.density, 
+        config.gamma
+      );
+      
+      drawComparisonPlot(
+        entropyCanvasRef,
+        numericalData?.x, numericalData?.entropy,
+        analyticalData?.x, analyticalEntropy,
+        'Entropy (J/kg·K)', '#9333ea', '#94a3b8'
+      );
     }
-  }, [data, sensorPositions]);
+  }, [numericalData, analyticalData, sensors, config.gamma]);
 
-  const diagnostics = React.useMemo(() => {
-    if (!data) return null;
-
-    const maxDensity = Math.max(...data.density);
-    const minDensity = Math.min(...data.density);
-    const maxVelocity = Math.max(...data.velocity);
-    const maxPressure = Math.max(...data.pressure);
-
-    let entropyGeneration = null;
-    if (data.entropy) {
-      const maxEntropy = Math.max(...data.entropy);
-      const minEntropy = Math.min(...data.entropy);
-      entropyGeneration = (maxEntropy - minEntropy).toExponential(3);
-    }
-
-    return {
-      maxDensity: maxDensity.toFixed(6),
-      minDensity: minDensity.toFixed(6),
-      maxVelocity: maxVelocity.toFixed(6),
-      maxPressure: maxPressure.toFixed(6),
-      entropyGeneration
-    };
-  }, [data]);
+  // Helper to format error values
+  const formatError = (value) => {
+    if (value === undefined || value === null) return '-';
+    if (Math.abs(value) < 0.0001) return value.toExponential(2);
+    return value.toFixed(4);
+  };
 
   const styles = {
     container: {
       display: 'flex',
-      height: '100vh',
-      fontFamily: 'Arial, sans-serif',
-      backgroundColor: '#f5f5f5'
+      minHeight: '100vh',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      backgroundColor: '#f8fafc'
     },
-    mainContent: {
+    main: {
       flex: 1,
-      padding: '30px',
+      padding: '24px',
       overflowY: 'auto'
     },
     sidebar: {
-      width: '300px',
-      backgroundColor: '#ffffff',
-      borderLeft: '1px solid #ddd',
-      padding: '20px',
-      boxShadow: '-2px 0 5px rgba(0,0,0,0.1)',
+      width: '360px',
+      backgroundColor: '#fff',
+      borderLeft: '1px solid #e2e8f0',
+      padding: '24px',
       overflowY: 'auto'
     },
     header: {
-      marginBottom: '20px',
-      paddingBottom: '15px',
-      borderBottom: '2px solid #333'
+      marginBottom: '24px'
     },
     title: {
       fontSize: '24px',
-      fontWeight: 'bold',
-      margin: '0 0 10px 0',
-      color: '#333'
+      fontWeight: '700',
+      color: '#1e293b',
+      margin: '0 0 4px 0'
     },
-    statusBar: {
-      backgroundColor: '#ffffff',
-      padding: '15px',
-      borderRadius: '5px',
-      marginBottom: '20px',
-      boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+    subtitle: {
+      fontSize: '14px',
+      color: '#64748b',
+      margin: 0
     },
-    controlPanel: {
-      backgroundColor: '#ffffff',
+    card: {
+      backgroundColor: '#fff',
+      borderRadius: '8px',
+      border: '1px solid #e2e8f0',
       padding: '20px',
-      borderRadius: '5px',
-      marginBottom: '20px',
-      boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+      marginBottom: '20px'
+    },
+    cardTitle: {
+      fontSize: '16px',
+      fontWeight: '600',
+      color: '#334155',
+      marginTop: 0,
+      marginBottom: '16px'
+    },
+    row: {
+      display: 'flex',
+      gap: '12px',
+      marginBottom: '12px',
+      alignItems: 'center'
+    },
+    label: {
+      fontSize: '13px',
+      fontWeight: '500',
+      color: '#475569',
+      marginBottom: '4px'
+    },
+    input: {
+      width: '70px',
+      padding: '6px 8px',
+      fontSize: '13px',
+      border: '1px solid #cbd5e1',
+      borderRadius: '4px'
+    },
+    select: {
+      padding: '8px 12px',
+      fontSize: '13px',
+      border: '1px solid #cbd5e1',
+      borderRadius: '4px',
+      backgroundColor: '#fff'
     },
     button: {
       padding: '10px 20px',
-      marginRight: '10px',
-      marginBottom: '10px',
-      border: 'none',
-      borderRadius: '4px',
-      cursor: 'pointer',
       fontSize: '14px',
       fontWeight: '500',
+      border: 'none',
+      borderRadius: '6px',
+      cursor: 'pointer',
       transition: 'background-color 0.2s'
     },
     buttonPrimary: {
-      backgroundColor: '#4CAF50',
-      color: 'white'
-    },
-    buttonDanger: {
-      backgroundColor: '#f44336',
-      color: 'white'
+      backgroundColor: '#2563eb',
+      color: '#fff'
     },
     buttonSecondary: {
-      backgroundColor: '#2196F3',
-      color: 'white'
+      backgroundColor: '#e2e8f0',
+      color: '#334155'
     },
-    buttonDisabled: {
-      backgroundColor: '#ccc',
-      cursor: 'not-allowed'
+    buttonSmall: {
+      padding: '4px 10px',
+      fontSize: '12px'
     },
-    visualizationContainer: {
-      backgroundColor: '#ffffff',
-      padding: '20px',
-      borderRadius: '5px',
-      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-      marginBottom: '20px'
+    sensorRow: {
+      display: 'grid',
+      gridTemplateColumns: '60px 80px 80px 80px 30px',
+      gap: '8px',
+      alignItems: 'center',
+      marginBottom: '8px',
+      fontSize: '13px'
+    },
+    sensorInput: {
+      width: '100%',
+      padding: '5px 6px',
+      fontSize: '12px',
+      border: '1px solid #cbd5e1',
+      borderRadius: '3px',
+      textAlign: 'right'
+    },
+    removeBtn: {
+      background: 'none',
+      border: 'none',
+      color: '#ef4444',
+      cursor: 'pointer',
+      fontSize: '16px',
+      padding: '2px 6px'
     },
     canvasWrapper: {
-      border: '2px solid #333',
-      backgroundColor: '#fff',
-      marginBottom: '20px'
+      border: '1px solid #e2e8f0',
+      borderRadius: '6px',
+      overflow: 'hidden',
+      marginBottom: '16px',
+      backgroundColor: '#fff'
     },
     sidebarSection: {
-      marginBottom: '25px',
+      marginBottom: '24px',
       paddingBottom: '20px',
-      borderBottom: '1px solid #eee'
+      borderBottom: '1px solid #e2e8f0'
     },
     sectionTitle: {
-      fontSize: '16px',
-      fontWeight: 'bold',
-      marginBottom: '12px',
-      color: '#555'
+      fontSize: '14px',
+      fontWeight: '600',
+      color: '#334155',
+      marginBottom: '12px'
     },
     valueRow: {
       display: 'flex',
       justifyContent: 'space-between',
-      padding: '8px 0',
-      fontSize: '14px'
+      padding: '6px 0',
+      fontSize: '13px'
     },
     valueLabel: {
-      color: '#666',
-      fontWeight: '500'
+      color: '#64748b'
     },
     valueData: {
-      color: '#333',
-      fontFamily: 'monospace'
+      fontFamily: 'monospace',
+      fontWeight: '500'
     },
-    formGroup: {
-      marginBottom: '15px'
-    },
-    label: {
-      display: 'block',
-      marginBottom: '5px',
-      fontWeight: 'bold',
-      fontSize: '14px'
-    },
-    input: {
+    errorTable: {
       width: '100%',
-      padding: '8px',
-      fontSize: '14px',
-      borderRadius: '4px',
-      border: '1px solid #ccc'
+      borderCollapse: 'collapse',
+      fontSize: '12px',
+      marginTop: '8px'
     },
-    select: {
-      width: '100%',
-      padding: '8px',
-      fontSize: '14px',
-      borderRadius: '4px',
-      border: '1px solid #ccc'
+    errorTableHeader: {
+      textAlign: 'left',
+      padding: '6px 4px',
+      borderBottom: '2px solid #e2e8f0',
+      color: '#64748b',
+      fontWeight: '600'
+    },
+    errorTableCell: {
+      padding: '6px 4px',
+      borderBottom: '1px solid #f1f5f9',
+      fontFamily: 'monospace',
+      textAlign: 'right'
+    },
+    errorTableCellLabel: {
+      padding: '6px 4px',
+      borderBottom: '1px solid #f1f5f9',
+      color: '#475569',
+      textAlign: 'left'
     }
   };
 
   return (
     <div style={styles.container}>
-      <div style={styles.mainContent}>
+      <div style={styles.main}>
         <div style={styles.header}>
-          <h1 style={styles.title}>1D Shock Tube Simulation</h1>
-          <p style={{ margin: 0, color: '#666' }}>Compressible Euler Equations</p>
+          <h1 style={styles.title}>1D Shock Tube Simulator</h1>
+          <p style={styles.subtitle}>Compressible Flow Reconstruction from Sparse Telemetry</p>
         </div>
 
-        <div style={styles.statusBar}>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <div>
-              <strong>Status:</strong> {status.initialized ? (status.running ? 'Running' : 'Ready') : 'Not Initialized'}
-            </div>
-            <div>
-              <strong>Scheme:</strong> {config.scheme.toUpperCase()} | <strong>Solver:</strong> {config.riemannSolver.toUpperCase()}
-            </div>
-            <div>
-              <strong>Grid:</strong> {config.numCells} cells
-            </div>
-          </div>
-        </div>
-
-        <div style={styles.controlPanel}>
-          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>Test Selection</h3>
-
-          <div style={styles.formGroup}>
-            <label style={styles.label}>Toro Test Case</label>
+        {/* Sensor Configuration */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Sensor Configuration</h3>
+          
+          <div style={{ ...styles.row, marginBottom: '16px' }}>
             <select
               style={styles.select}
-              value={selectedToroTest}
-              onChange={(e) => setSelectedToroTest(Number(e.target.value))}
+              value={selectedTest}
+              onChange={(e) => setSelectedTest(Number(e.target.value))}
             >
-              <option value="1">Test 1: Sod Problem</option>
-              <option value="2">Test 2: 123 Problem (Strong Rarefraction)</option>
-              <option value="3">Test 3: Blast Wave (Left Half)</option>
-              <option value="4">Test 4: Collision</option>
-              <option value="5">Test 5: Stationary Contact</option>
+              <option value={1}>Test 1: Sod Problem</option>
+              <option value={2}>Test 2: 123 Problem</option>
+              <option value={3}>Test 3: Blast Wave</option>
+              <option value={4}>Test 4: Collision</option>
+              <option value={5}>Test 5: Stationary Contact</option>
             </select>
+            <button
+              style={{ ...styles.button, ...styles.buttonSecondary }}
+              onClick={loadToroTest}
+            >
+              Load Toro Test Data
+            </button>
           </div>
+
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ ...styles.sensorRow, fontWeight: '600', color: '#64748b', fontSize: '11px' }}>
+              <span>Position</span>
+              <span>Density</span>
+              <span>Velocity</span>
+              <span>Pressure</span>
+              <span></span>
+            </div>
+            {sensors.map((sensor, idx) => (
+              <div key={idx} style={styles.sensorRow}>
+                <input
+                  type="number"
+                  style={styles.sensorInput}
+                  value={sensor.x}
+                  onChange={(e) => updateSensor(idx, 'x', e.target.value)}
+                  step="0.05"
+                />
+                <input
+                  type="number"
+                  style={styles.sensorInput}
+                  value={sensor.rho}
+                  onChange={(e) => updateSensor(idx, 'rho', e.target.value)}
+                  step="0.1"
+                />
+                <input
+                  type="number"
+                  style={styles.sensorInput}
+                  value={sensor.u}
+                  onChange={(e) => updateSensor(idx, 'u', e.target.value)}
+                  step="0.1"
+                />
+                <input
+                  type="number"
+                  style={styles.sensorInput}
+                  value={sensor.p}
+                  onChange={(e) => updateSensor(idx, 'p', e.target.value)}
+                  step="0.1"
+                />
+                <button
+                  style={styles.removeBtn}
+                  onClick={() => removeSensor(idx)}
+                  disabled={sensors.length <= 2}
+                >
+                  x
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <button
+            style={{ ...styles.button, ...styles.buttonSecondary, ...styles.buttonSmall }}
+            onClick={addSensor}
+            disabled={sensors.length >= 10}
+          >
+            + Add Sensor
+          </button>
+        </div>
+
+        {/* Simulation Settings */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Simulation Settings</h3>
           
-          <button
-            onClick={initializeToroTest}
-            style={{
-              ...styles.button,
-              backgroundColor: '#9C27B0',
-              color: 'white'
-            }}
-          >
-            Initialize Toro Test
-          </button>
-
-          <button
-            onClick={initializeSimulation}
-            style={{
-              ...styles.button,
-              ...styles.buttonSecondary
-            }}
-          >
-            Initialize Custom
-          </button>
-        </div>
-
-        <div style={styles.controlPanel}>
-          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>Sensor Configuration</h3>
-
-          <div style={styles.formGroup}>
-            <label style={styles.label}>Sensor Positions (comma-separated, 0-1)</label>
-            <input
-              style={styles.input}
-              type="text"
-              value={sensorPositions.join(', ')}
-              onChange={(e) => {
-                const positions = e.target.value.split(',').map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
-                setSensorPositions(positions);
-              }}
-            />
-          </div>
-
-          <button
-            onClick={placeSensors}
-            disabled={!status.initialized}
-            style={{
-              ...styles.button,
-              ...(status.initialized ? styles.buttonSecondary : styles.buttonDisabled)
-            }}
-          >
-            Update Sensors
-          </button>
-        </div>
-
-        <div style={styles.controlPanel}>
-          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>Simulation Parameters</h3>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px' }}>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Grid Cells</label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
+            <div>
+              <div style={styles.label}>Grid Cells</div>
               <select
-                style={styles.select}
+                style={{ ...styles.select, width: '100%' }}
                 value={config.numCells}
                 onChange={(e) => setConfig({ ...config, numCells: Number(e.target.value) })}
               >
-                <option value="100">100</option>
-                <option value="500">500</option>
-                <option value="1000">1000</option>
-                <option value="2000">2000</option>
+                <option value={200}>200</option>
+                <option value={500}>500</option>
+                <option value={1000}>1000</option>
+                <option value={2000}>2000</option>
               </select>
             </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Scheme</label>
+            <div>
+              <div style={styles.label}>Scheme</div>
               <select
-                style={styles.select}
+                style={{ ...styles.select, width: '100%' }}
                 value={config.scheme}
                 onChange={(e) => setConfig({ ...config, scheme: e.target.value })}
               >
-                <option value="godunov">Godunov (1st Order)</option>
-                <option value="muscl">MUSCL (2nd Order)</option>
+                <option value="godunov">Godunov</option>
+                <option value="muscl">MUSCL</option>
               </select>
             </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Riemann Solver</label>
+            <div>
+              <div style={styles.label}>Riemann Solver</div>
               <select
-                style={styles.select}
+                style={{ ...styles.select, width: '100%' }}
                 value={config.riemannSolver}
                 onChange={(e) => setConfig({ ...config, riemannSolver: e.target.value })}
               >
@@ -620,158 +681,39 @@ const ShockTubeViewer = () => {
                 <option value="exact">Exact</option>
               </select>
             </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>CFL Number</label>
-              <input
-                style={styles.input}
-                type="number"
-                value={config.CFL}
-                onChange={(e) => setConfig({ ...config, CFL: parseFloat(e.target.value) })}
-                step="0.1"
-              />
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>End Time (s)</label>
-              <input
-                style={styles.input}
-                type="number"
-                value={config.endTime}
-                onChange={(e) => setConfig({ ...config, endTime: parseFloat(e.target.value) })}
-                step="0.01"
-              />
-            </div>
-
-            <div style={styles.formGroup}>
-              <label style={styles.label}>Gamma</label>
-              <input
-                style={styles.input}
-                type="number"
-                value={config.gamma}
-                onChange={(e) => setConfig({ ...config, gamma: parseFloat(e.target.value) })}
-                step="0.01"
-              />
-            </div>
-          </div>
-
-          <div style={{ marginTop: '20px' }}>
-            <h4 style={{ marginBottom: '10px' }}>Initial Conditions</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-              <div>
-                <h5 style={{ marginBottom: '10px', color: '#666' }}>Left State</h5>
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>Density (kg/m³)</label>
-                  <input
-                    style={styles.input}
-                    type="number"
-                    value={config.rho_L}
-                    onChange={(e) => setConfig({ ...config, rho_L: parseFloat(e.target.value) })}
-                    step="0.1"
-                  />
-                </div>
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>Velocity (m/s)</label>
-                  <input
-                    style={styles.input}
-                    type="number"
-                    value={config.u_L}
-                    onChange={(e) => setConfig({ ...config, u_L: parseFloat(e.target.value) })}
-                    step="0.1"
-                  />
-                </div>
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>Pressure (Pa)</label>
-                  <input
-                    style={styles.input}
-                    type="number"
-                    value={config.p_L}
-                    onChange={(e) => setConfig({ ...config, p_L: parseFloat(e.target.value) })}
-                    step="0.1"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <h5 style={{ marginBottom: '10px', color: '#666' }}>Right State</h5>
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>Density (kg/m³)</label>
-                  <input
-                    style={styles.input}
-                    type="number"
-                    value={config.rho_R}
-                    onChange={(e) => setConfig({ ...config, rho_R: parseFloat(e.target.value) })}
-                    step="0.01"
-                  />
-                </div>
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>Velocity (m/s)</label>
-                  <input
-                    style={styles.input}
-                    type="number"
-                    value={config.u_R}
-                    onChange={(e) => setConfig({ ...config, u_R: parseFloat(e.target.value) })}
-                    step="0.1"
-                  />
-                </div>
-                <div style={styles.formGroup}>
-                  <label style={styles.label}>Pressure (Pa)</label>
-                  <input
-                    style={styles.input}
-                    type="number"
-                    value={config.p_R}
-                    onChange={(e) => setConfig({ ...config, p_R: parseFloat(e.target.value) })}
-                    step="0.01"
-                  />
-                </div>
-              </div>
+            <div>
+              <div style={styles.label}>Interpolation</div>
+              <select
+                style={{ ...styles.select, width: '100%' }}
+                value={config.interpolation}
+                onChange={(e) => setConfig({ ...config, interpolation: e.target.value })}
+              >
+                <option value="piecewise_constant">Piecewise Constant</option>
+                <option value="linear">Linear</option>
+              </select>
             </div>
           </div>
 
           <div style={{ marginTop: '20px' }}>
             <button
-              onClick={initializeSimulation}
               style={{
                 ...styles.button,
-                ...styles.buttonSecondary
+                ...styles.buttonPrimary,
+                opacity: status.running ? 0.6 : 1
               }}
-            >
-              Initialize
-            </button>
-
-            <button
               onClick={runSimulation}
-              disabled={!status.initialized || status.running}
-              style={{
-                ...styles.button,
-                ...(status.initialized && !status.running ? styles.buttonPrimary : styles.buttonDisabled)
-              }}
+              disabled={status.running}
             >
               {status.running ? 'Running...' : 'Run Simulation'}
-            </button>
-
-            <button
-              onClick={async () => {
-                await fetch(`${API_URL}/api/simulation/reset`, { method: 'POST' });
-                setStatus({ initialized: false, running: false });
-                setData(null);
-                setSimulationInfo(null);
-                setValidationResults(null);
-              }}
-              style={{
-                ...styles.button,
-                backgroundColor: '#FF9800',
-                color: 'white'
-              }}
-            >
-              Reset
             </button>
           </div>
         </div>
 
-        <div style={styles.visualizationContainer}>
-          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>Results</h3>
-          {data ? (
+        {/* Results */}
+        <div style={styles.card}>
+          <h3 style={styles.cardTitle}>Results</h3>
+          
+          {numericalData ? (
             <>
               <div style={styles.canvasWrapper}>
                 <canvas ref={densityCanvasRef} />
@@ -782,185 +724,125 @@ const ShockTubeViewer = () => {
               <div style={styles.canvasWrapper}>
                 <canvas ref={pressureCanvasRef} />
               </div>
-              {data.entropy && (
-                <div style={styles.canvasWrapper}>
-                  <canvas ref={entropyCanvasRef} />
-                </div>
-              )}
+              <div style={styles.canvasWrapper}>
+                <canvas ref={entropyCanvasRef} />
+              </div>
             </>
           ) : (
-            <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>
-              Initialize and run simulation to view results
+            <div style={{ padding: '60px', textAlign: 'center', color: '#94a3b8' }}>
+              Configure sensors and run simulation to view results
             </div>
           )}
         </div>
       </div>
 
+      {/* Sidebar */}
       <div style={styles.sidebar}>
-        <h2 style={{ marginTop: 0, marginBottom: '20px', fontSize: '18px' }}>Diagnostics</h2>
+        <h2 style={{ fontSize: '18px', fontWeight: '600', marginTop: 0, marginBottom: '20px', color: '#1e293b' }}>
+          Analysis
+        </h2>
 
+        {/* Validation Results */}
         {validationResults && (
           <div style={styles.sidebarSection}>
-            <div style={styles.sectionTitle}>Validation (vs Analytical)</div>
+            <div style={styles.sectionTitle}>Validation vs Analytical</div>
             
-            <div style={{
-              padding: '12px',
-              borderRadius: '6px',
-              marginBottom: '15px',
-              textAlign: 'center',
-              fontWeight: 'bold',
-              fontSize: '16px',
-              backgroundColor: validationResults.passes ? '#d4edda' : '#f8d7da',
-              color: validationResults.passes ? '#155724' : '#721c24',
-              border: `2px solid ${validationResults.passes ? '#c3e6cb' : '#f5c6cb'}`
-            }}>
-              {validationResults.passes ? 'PASSES' : 'FAILS'} 3% Threshold
+            {/* Error Norms Table */}
+            <div style={{ fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '8px' }}>
+              Error Norms
             </div>
-            
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Density Error:</span>
-              <span style={{
-                ...styles.valueData,
-                color: validationResults.density_error_percent < 3 ? '#155724' : '#721c24',
-                fontWeight: 'bold'
-              }}>
-                {validationResults.density_error_percent.toFixed(2)}%
-              </span>
-            </div>
-            
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Velocity Error:</span>
-              <span style={{
-                ...styles.valueData,
-                color: validationResults.velocity_error_percent < 3 ? '#155724' : '#721c24',
-                fontWeight: 'bold'
-              }}>
-                {validationResults.velocity_error_percent.toFixed(2)}%
-              </span>
-            </div>
-            
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Pressure Error:</span>
-              <span style={{
-                ...styles.valueData,
-                color: validationResults.pressure_error_percent < 3 ? '#155724' : '#721c24',
-                fontWeight: 'bold'
-              }}>
-                {validationResults.pressure_error_percent.toFixed(2)}%
-              </span>
-            </div>
-            
-            <div style={{
-              marginTop: '10px',
-              padding: '8px',
-              backgroundColor: '#f8f9fa',
-              borderRadius: '4px',
-              fontSize: '12px',
-              color: '#666'
-            }}>
-              L1 Error: {validationResults.L1_error.toFixed(4)}
-            </div>
+            <table style={styles.errorTable}>
+              <thead>
+                <tr>
+                  <th style={styles.errorTableHeader}></th>
+                  <th style={{ ...styles.errorTableHeader, textAlign: 'right' }}>L₁</th>
+                  <th style={{ ...styles.errorTableHeader, textAlign: 'right' }}>L₂</th>
+                  <th style={{ ...styles.errorTableHeader, textAlign: 'right' }}>L∞</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={styles.errorTableCellLabel}>Density</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.L1_density)}</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.L2_density)}</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.Linf_density)}</td>
+                </tr>
+                <tr>
+                  <td style={styles.errorTableCellLabel}>Velocity</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.L1_velocity)}</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.L2_velocity)}</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.Linf_velocity)}</td>
+                </tr>
+                <tr>
+                  <td style={styles.errorTableCellLabel}>Pressure</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.L1_pressure)}</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.L2_pressure)}</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.Linf_pressure)}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         )}
 
-        {simulationInfo && (
+        {/* Simulation Info */}
+        {numericalData && (
           <div style={styles.sidebarSection}>
             <div style={styles.sectionTitle}>Simulation Info</div>
             <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Final Time:</span>
-              <span style={styles.valueData}>{simulationInfo.time?.toFixed(4)} s</span>
+              <span style={styles.valueLabel}>Time</span>
+              <span style={styles.valueData}>{numericalData.time.toFixed(4)} s</span>
             </div>
             <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Total Steps:</span>
-              <span style={styles.valueData}>{simulationInfo.step}</span>
+              <span style={styles.valueLabel}>Steps</span>
+              <span style={styles.valueData}>{numericalData.step}</span>
             </div>
             <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Total Mass:</span>
-              <span style={styles.valueData}>{simulationInfo.total_mass?.toFixed(6)}</span>
-            </div>
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Total Energy:</span>
-              <span style={styles.valueData}>{simulationInfo.total_energy?.toFixed(6)}</span>
+              <span style={styles.valueLabel}>Grid Cells</span>
+              <span style={styles.valueData}>{numericalData.numCells}</span>
             </div>
           </div>
         )}
 
-        {diagnostics && (
-          <div style={styles.sidebarSection}>
-            <div style={styles.sectionTitle}>Flow Properties</div>
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Max Density:</span>
-              <span style={styles.valueData}>{diagnostics.maxDensity}</span>
-            </div>
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Min Density:</span>
-              <span style={styles.valueData}>{diagnostics.minDensity}</span>
-            </div>
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Max Velocity:</span>
-              <span style={styles.valueData}>{diagnostics.maxVelocity}</span>
-            </div>
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Max Pressure:</span>
-              <span style={styles.valueData}>{diagnostics.maxPressure}</span>
-            </div>
-            {diagnostics.entropyGeneration && (
-              <div style={styles.valueRow}>
-                <span style={styles.valueLabel}>Entropy Generation:</span>
-                <span style={styles.valueData}>{diagnostics.entropyGeneration}</span>
-              </div>
-            )}
+        {/* Sensor Summary */}
+        <div style={styles.sidebarSection}>
+          <div style={styles.sectionTitle}>Sensor Summary</div>
+          <div style={styles.valueRow}>
+            <span style={styles.valueLabel}>Active Sensors</span>
+            <span style={styles.valueData}>{sensors.length}</span>
           </div>
-        )}
-
-        {sensorReadings && (
-          <div style={styles.sidebarSection}>
-            <div style={styles.sectionTitle}>Sensor Readings</div>
-            {sensorReadings.readings.map((reading, idx) => (
-              <div key={idx} style={{ 
-                marginBottom: '15px', 
-                padding: '10px', 
-                backgroundColor: '#f8f9fa', 
-                borderRadius: '4px',
-                border: '1px solid #e0e0e0'
-              }}>
-                <div style={{ fontWeight: 'bold', marginBottom: '5px', color: '#d32f2f' }}>
-                  Sensor {idx + 1} @ x={reading.position.toFixed(3)}m
-                </div>
-                <div style={styles.valueRow}>
-                  <span style={styles.valueLabel}>Density:</span>
-                  <span style={styles.valueData}>{reading.density.toFixed(4)}</span>
-                </div>
-                <div style={styles.valueRow}>
-                  <span style={styles.valueLabel}>Velocity:</span>
-                  <span style={styles.valueData}>{reading.velocity.toFixed(4)}</span>
-                </div>
-                <div style={styles.valueRow}>
-                  <span style={styles.valueLabel}>Pressure:</span>
-                  <span style={styles.valueData}>{reading.pressure.toFixed(4)}</span>
-                </div>
-                <div style={styles.valueRow}>
-                  <span style={styles.valueLabel}>Entropy:</span>
-                  <span style={styles.valueData}>{reading.entropy.toFixed(4)}</span>
-                </div>
-              </div>
-            ))}
+          <div style={styles.valueRow}>
+            <span style={styles.valueLabel}>Coverage</span>
+            <span style={styles.valueData}>
+              {sensors.length > 0 
+                ? `${(Math.min(...sensors.map(s => s.x))).toFixed(2)} - ${(Math.max(...sensors.map(s => s.x))).toFixed(2)} m`
+                : '-'
+              }
+            </span>
           </div>
-        )}
+          <div style={styles.valueRow}>
+            <span style={styles.valueLabel}>Interpolation</span>
+            <span style={styles.valueData}>{config.interpolation === 'linear' ? 'Linear' : 'Piecewise'}</span>
+          </div>
+        </div>
 
+        {/* Configuration */}
         <div style={styles.sidebarSection}>
           <div style={styles.sectionTitle}>Configuration</div>
           <div style={styles.valueRow}>
-            <span style={styles.valueLabel}>Domain Length:</span>
-            <span style={styles.valueData}>{config.length} m</span>
+            <span style={styles.valueLabel}>Scheme</span>
+            <span style={styles.valueData}>{config.scheme.toUpperCase()}</span>
           </div>
           <div style={styles.valueRow}>
-            <span style={styles.valueLabel}>Grid Cells:</span>
-            <span style={styles.valueData}>{config.numCells}</span>
+            <span style={styles.valueLabel}>Riemann Solver</span>
+            <span style={styles.valueData}>{config.riemannSolver.toUpperCase()}</span>
           </div>
           <div style={styles.valueRow}>
-            <span style={styles.valueLabel}>Cell Width:</span>
-            <span style={styles.valueData}>{(config.length / config.numCells).toFixed(6)} m</span>
+            <span style={styles.valueLabel}>CFL</span>
+            <span style={styles.valueData}>{config.CFL}</span>
+          </div>
+          <div style={styles.valueRow}>
+            <span style={styles.valueLabel}>End Time</span>
+            <span style={styles.valueData}>{config.endTime} s</span>
           </div>
         </div>
       </div>
@@ -968,4 +850,4 @@ const ShockTubeViewer = () => {
   );
 };
 
-export default ShockTubeViewer;
+export default ShockTubeSimulator;

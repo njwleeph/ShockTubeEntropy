@@ -129,6 +129,19 @@ shocktube/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/shocktube.dir/build.make CMakeFiles/shocktube.dir/build
 .PHONY : shocktube/fast
 
+#=============================================================================
+# Target rules for targets named solver_test
+
+# Build rule for target.
+solver_test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 solver_test
+.PHONY : solver_test
+
+# fast build rule for target.
+solver_test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/build
+.PHONY : solver_test/fast
+
 src/main.o: src/main.cpp.o
 .PHONY : src/main.o
 
@@ -159,6 +172,7 @@ src/solver.o: src/solver.cpp.o
 # target to build an object file
 src/solver.cpp.o:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/shocktube.dir/build.make CMakeFiles/shocktube.dir/src/solver.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver.cpp.o
 .PHONY : src/solver.cpp.o
 
 src/solver.i: src/solver.cpp.i
@@ -167,6 +181,7 @@ src/solver.i: src/solver.cpp.i
 # target to preprocess a source file
 src/solver.cpp.i:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/shocktube.dir/build.make CMakeFiles/shocktube.dir/src/solver.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver.cpp.i
 .PHONY : src/solver.cpp.i
 
 src/solver.s: src/solver.cpp.s
@@ -175,7 +190,32 @@ src/solver.s: src/solver.cpp.s
 # target to generate assembly for a file
 src/solver.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/shocktube.dir/build.make CMakeFiles/shocktube.dir/src/solver.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver.cpp.s
 .PHONY : src/solver.cpp.s
+
+src/solver_test.o: src/solver_test.cpp.o
+.PHONY : src/solver_test.o
+
+# target to build an object file
+src/solver_test.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver_test.cpp.o
+.PHONY : src/solver_test.cpp.o
+
+src/solver_test.i: src/solver_test.cpp.i
+.PHONY : src/solver_test.i
+
+# target to preprocess a source file
+src/solver_test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver_test.cpp.i
+.PHONY : src/solver_test.cpp.i
+
+src/solver_test.s: src/solver_test.cpp.s
+.PHONY : src/solver_test.s
+
+# target to generate assembly for a file
+src/solver_test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver_test.cpp.s
+.PHONY : src/solver_test.cpp.s
 
 # Help Target
 help:
@@ -186,12 +226,16 @@ help:
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
 	@echo "... shocktube"
+	@echo "... solver_test"
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"
 	@echo "... src/solver.o"
 	@echo "... src/solver.i"
 	@echo "... src/solver.s"
+	@echo "... src/solver_test.o"
+	@echo "... src/solver_test.i"
+	@echo "... src/solver_test.s"
 .PHONY : help
 
 
