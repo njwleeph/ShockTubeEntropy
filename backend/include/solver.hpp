@@ -66,14 +66,17 @@ public:
     double L1_error_density;
     double L1_error_velocity;
     double L1_error_pressure;
+    double L1_error_entropy;
 
     double L2_error_density;
     double L2_error_velocity;
     double L2_error_pressure;
+    double L2_error_entropy;
 
     double Linf_error_density;
     double Linf_error_velocity;
     double Linf_error_pressure;
+    double Linf_error_entropy;
 
     int num_points_validated;
   };

@@ -779,6 +779,12 @@ const ShockTubeSimulator = () => {
                   <td style={styles.errorTableCell}>{formatError(validationResults.L2_pressure)}</td>
                   <td style={styles.errorTableCell}>{formatError(validationResults.Linf_pressure)}</td>
                 </tr>
+                <tr>
+                  <td style={styles.errorTableCellLabel}>Entropy</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.L1_entropy)}</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.L2_entropy)}</td>
+                  <td style={styles.errorTableCell}>{formatError(validationResults.Linf_entropy)}</td>
+                </tr>
               </tbody>
             </table>
           </div>

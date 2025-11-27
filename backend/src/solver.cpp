@@ -1118,6 +1118,7 @@ ShockSolver::ValidationMetrics ShockSolver::validateAgainstAnalytical() const {
   double sum_rho_L1 = 0.0, sum_rho_L2 = 0.0, max_rho = 0.0;
   double sum_u_L1 = 0.0, sum_u_L2 = 0.0, max_u = 0.0;
   double sum_p_L1 = 0.0, sum_p_L2 = 0.0, max_p = 0.0;
+  double sum_s_L1 = 0.0, sum_s_L2 = 0.0, max_s = 0.0;
 
   // Compute errors for each grid point
   for (int i = 0; i < cfg_.numCells; ++i) {
@@ -1125,21 +1126,29 @@ ShockSolver::ValidationMetrics ShockSolver::validateAgainstAnalytical() const {
     double err_rho = std::abs(rho_[i] - rho_exact[i]);
     double err_u = std::abs(u_[i] - u_exact[i]);
     double err_p = std::abs(p_[i] - p_exact[i]);
+    
+    // Entropy: s = ln(p / rho^gamma)
+    double s_num = std::log(p_[i] / std::pow(rho_[i], cfg_.gamma));
+    double s_exact = std::log(p_exact[i] / std::pow(rho_exact[i], cfg_.gamma));
+    double err_s = std::abs(s_num - s_exact);
 
     // L1 norm (sum of abs errors)
     sum_rho_L1 += err_rho;
     sum_u_L1 += err_u;
     sum_p_L1 += err_p;
+    sum_s_L1 += err_s;
 
     // L2 norm (sum of squared errors)
     sum_rho_L2 += err_rho * err_rho;
     sum_u_L2 += err_u * err_u;
     sum_p_L2 += err_p * err_p;
+    sum_s_L2 += err_s * err_s;
 
     // Linf norm (max absolute error)
     if (err_rho > max_rho) { max_rho = err_rho; }
     if (err_u > max_u) { max_u = err_u; }
     if (err_p > max_p) { max_p = err_p; }
+    if (err_s > max_s) { max_s = err_s; }
   }
 
   // Normalize by number of cells 
@@ -1147,14 +1156,17 @@ ShockSolver::ValidationMetrics ShockSolver::validateAgainstAnalytical() const {
   metrics.L1_error_density = sum_rho_L1 / N;
   metrics.L1_error_velocity = sum_u_L1 / N;
   metrics.L1_error_pressure = sum_p_L1 / N;
+  metrics.L1_error_entropy = sum_s_L1 / N;
 
   metrics.L2_error_density = std::sqrt(sum_rho_L2 / N);
   metrics.L2_error_velocity = std::sqrt(sum_u_L2 / N);
   metrics.L2_error_pressure = std::sqrt(sum_p_L2 / N);
+  metrics.L2_error_entropy = std::sqrt(sum_s_L2 / N);
 
   metrics.Linf_error_density = max_rho;
   metrics.Linf_error_velocity = max_u;
   metrics.Linf_error_pressure = max_p;
+  metrics.Linf_error_entropy = max_s;
 
   metrics.num_points_validated = N;
 
