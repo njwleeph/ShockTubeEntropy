@@ -486,19 +486,16 @@ void handleValidate(const httplib::Request& req, httplib::Response& res) {
     response["L1_density"] = metrics.L1_error_density;
     response["L1_velocity"] = metrics.L1_error_velocity;
     response["L1_pressure"] = metrics.L1_error_pressure;
-    response["L1_entropy"] = metrics.L1_error_entropy;
     
     // L2 errors (RMS error)
     response["L2_density"] = metrics.L2_error_density;
     response["L2_velocity"] = metrics.L2_error_velocity;
     response["L2_pressure"] = metrics.L2_error_pressure;
-    response["L2_entropy"] = metrics.L2_error_entropy;
     
     // Linf errors (max absolute error)
     response["Linf_density"] = metrics.Linf_error_density;
     response["Linf_velocity"] = metrics.Linf_error_velocity;
     response["Linf_pressure"] = metrics.Linf_error_pressure;
-    response["Linf_entropy"] = metrics.Linf_error_entropy;
     
     // Legacy field for backwards compatibility
     response["L1_error"] = metrics.L1_error_density;

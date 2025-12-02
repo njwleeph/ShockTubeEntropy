@@ -3,7 +3,6 @@ project(ShockSimAPI CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-<<<<<<< HEAD
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 march=native -DNDEBUG")
 
 find_package(Threads REQUIRED)
@@ -24,13 +23,6 @@ add_executable(solver_test
   src/solver.cpp
 )
 
-add_executable(toro_test
-  src/toro_test.cpp
-  src/solver.cpp
-)
-
-target_include_directories(toro_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
-
 target_include_directories(solver_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 target_include_directories(shocktube PRIVATE
@@ -40,7 +32,3 @@ target_include_directories(shocktube PRIVATE
 target_link_libraries(shocktube PRIVATE
   Threads::Threads
 )
-=======
-
-add_subdirectory(backend)
->>>>>>> 9862d8810367ebb3d6a4e24f5326bc35b8a62713

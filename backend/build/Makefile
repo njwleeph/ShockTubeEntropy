@@ -142,6 +142,19 @@ solver_test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/build
 .PHONY : solver_test/fast
 
+#=============================================================================
+# Target rules for targets named toro_test
+
+# Build rule for target.
+toro_test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 toro_test
+.PHONY : toro_test
+
+# fast build rule for target.
+toro_test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/toro_test.dir/build.make CMakeFiles/toro_test.dir/build
+.PHONY : toro_test/fast
+
 src/main.o: src/main.cpp.o
 .PHONY : src/main.o
 
@@ -173,6 +186,7 @@ src/solver.o: src/solver.cpp.o
 src/solver.cpp.o:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/shocktube.dir/build.make CMakeFiles/shocktube.dir/src/solver.cpp.o
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/toro_test.dir/build.make CMakeFiles/toro_test.dir/src/solver.cpp.o
 .PHONY : src/solver.cpp.o
 
 src/solver.i: src/solver.cpp.i
@@ -182,6 +196,7 @@ src/solver.i: src/solver.cpp.i
 src/solver.cpp.i:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/shocktube.dir/build.make CMakeFiles/shocktube.dir/src/solver.cpp.i
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/toro_test.dir/build.make CMakeFiles/toro_test.dir/src/solver.cpp.i
 .PHONY : src/solver.cpp.i
 
 src/solver.s: src/solver.cpp.s
@@ -191,6 +206,7 @@ src/solver.s: src/solver.cpp.s
 src/solver.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/shocktube.dir/build.make CMakeFiles/shocktube.dir/src/solver.cpp.s
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/toro_test.dir/build.make CMakeFiles/toro_test.dir/src/solver.cpp.s
 .PHONY : src/solver.cpp.s
 
 src/solver_test.o: src/solver_test.cpp.o
@@ -217,6 +233,30 @@ src/solver_test.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/solver_test.dir/build.make CMakeFiles/solver_test.dir/src/solver_test.cpp.s
 .PHONY : src/solver_test.cpp.s
 
+src/toro_test.o: src/toro_test.cpp.o
+.PHONY : src/toro_test.o
+
+# target to build an object file
+src/toro_test.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/toro_test.dir/build.make CMakeFiles/toro_test.dir/src/toro_test.cpp.o
+.PHONY : src/toro_test.cpp.o
+
+src/toro_test.i: src/toro_test.cpp.i
+.PHONY : src/toro_test.i
+
+# target to preprocess a source file
+src/toro_test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/toro_test.dir/build.make CMakeFiles/toro_test.dir/src/toro_test.cpp.i
+.PHONY : src/toro_test.cpp.i
+
+src/toro_test.s: src/toro_test.cpp.s
+.PHONY : src/toro_test.s
+
+# target to generate assembly for a file
+src/toro_test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/toro_test.dir/build.make CMakeFiles/toro_test.dir/src/toro_test.cpp.s
+.PHONY : src/toro_test.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -227,6 +267,7 @@ help:
 	@echo "... rebuild_cache"
 	@echo "... shocktube"
 	@echo "... solver_test"
+	@echo "... toro_test"
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"
@@ -236,6 +277,9 @@ help:
 	@echo "... src/solver_test.o"
 	@echo "... src/solver_test.i"
 	@echo "... src/solver_test.s"
+	@echo "... src/toro_test.o"
+	@echo "... src/toro_test.i"
+	@echo "... src/toro_test.s"
 .PHONY : help
 
 

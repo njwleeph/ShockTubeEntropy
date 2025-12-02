@@ -648,49 +648,20 @@ void ShockSolver::reconstructMUSCL(int i,
   p_R = std::max(p_R, TOL);
 }
 
-/**
- * Slope Limiter 
- */
-double ShockSolver::slopeLimit(double v_minus, double v_center, double v_plut) const {
+double ShockSolver::slopeLimit(double v_minus, double v_center, double v_plus) const {
   double delta_minus = v_center - v_minus;
-  double delta_plus = v_plut - v_center;
+  double delta_plus = v_plus - v_center;
 
-  // If slopes have opposite signs, we're at an extremum -> set slope to 0
-  if (delta_plus * delta_minus <= 0.0) return 0.0;
-
-  // Limiter Selection - Change LIMITER_TYPE 
-  // 1 = minmod (most diffusive, very stable for shocks)
-  // 2 = MC (Monotized Central - good balance)
-  // 3 = van Leer (smooth, less diffusive, good for smooth regions)
-  // 4 = superbee (agressive, not optimal for smooth regions)
-
-  const int LIMITER_TYPE = 3;
-
-  double slope;
-
-  if (LIMITER_TYPE == 1) {
-    double sign = (delta_plus > 0.0) ? 1.0 : -1.0;
-    slope = sign * std::min(std::abs(delta_plus), std::abs(delta_minus));
-  } else if (LIMITER_TYPE == 2) {
-    double delta_center = 0.5 * (delta_plus + delta_minus);
-    double sign = (delta_center > 0.0) ? 1.0 : -1.0;
-    slope = sign * std::min({2.0 * std::abs(delta_minus),
-                             2.0 * std::abs(delta_plus),
-                             std::abs(delta_center)});
-  } else if (LIMITER_TYPE == 3) {
-    double r = delta_minus / delta_plus;    
-    double phi_r = (r + std::abs(r)) / (1.0 * std::abs(r));
-    slope = phi_r * delta_plus;
-  } else if (LIMITER_TYPE == 4) {
-    double r = delta_minus / delta_plus;
-    double phi_r = std::max({0.0, std::min(2.0 * r, 1.0), std::min(r, 2.0)});
-    slope = phi_r * delta_plus;
-  } else {
-    double sign = (delta_plus > 0.0) ? 1.0 : -1.0;
-    slope = sign * std::min(std::abs(delta_plus), std::abs(delta_minus));
+  if (delta_plus * delta_minus <= 0.0) {
+    return 0.0;
   }
 
-  return slope;
+  double delta_center = 0.5 * (v_plus - v_minus);
+
+  double sign = (delta_center > 0.0) ? 1.0 : -1.0;
+  return sign * std::min({std::abs(delta_center), 
+                          2.0 * std::abs(delta_minus),
+                          2.0 * std::abs(delta_plus)});
 }
 
 /**
