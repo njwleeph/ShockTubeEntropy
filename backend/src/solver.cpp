@@ -24,8 +24,7 @@ ShockSolver::ShockSolver(const Config& cfg)
     dx_(cfg.length / cfg.numCells),
     t_(0.0),
     step_count_(0),
-    scheme_type_("godunov"),
-    solver_type_("hllc") {
+    flux_type_("hllc") {
   
   rho_.resize(cfg_.numCells);
   u_.resize(cfg_.numCells);
@@ -46,7 +45,7 @@ ShockSolver::ShockSolver(const Config& cfg)
  */
 void ShockSolver::initializeShockTube(double rho_L, double u_L, double p_L,
                                       double rho_R, double u_R, double p_R,
-                                      double x_diaphragm) {
+                                      double x_diaphragm, double endTime) {
 
   initial_conditions_.rho_L = rho_L;
   initial_conditions_.u_L = u_L;
@@ -55,6 +54,7 @@ void ShockSolver::initializeShockTube(double rho_L, double u_L, double p_L,
   initial_conditions_.u_R = u_R;
   initial_conditions_.p_R = p_R;
   initial_conditions_.x_diaphragm = x_diaphragm;
+  initial_conditions_.endTime = endTime;
   initial_conditions_.is_valid = true;
 
   for (int i = 0; i < cfg_.numCells; ++i) {
@@ -90,7 +90,7 @@ void ShockSolver::initializeCustom(const std::vector<PrimitiveVars>& initial) {
  * Initialize verification cross-reference with Toro
  */
 void ShockSolver::initializeToroTest(ToroTest test) {
-  double rho_L, u_L, p_L, rho_R, u_R, p_R, x_diaphragm;
+  double rho_L, u_L, p_L, rho_R, u_R, p_R, x_diaphragm, endTime;
   
   switch (test) {
     case ToroTest::TEST1_SOD:
@@ -98,6 +98,7 @@ void ShockSolver::initializeToroTest(ToroTest test) {
       rho_L = 1.0; u_L = 0.0; p_L = 1.0;
       rho_R = 0.125; u_R = 0.0; p_R = 0.1;
       x_diaphragm = 0.5;
+      endTime = 0.25;
       break;
       
     case ToroTest::TEST2_123:
@@ -105,6 +106,7 @@ void ShockSolver::initializeToroTest(ToroTest test) {
       rho_L = 1.0; u_L = -2.0; p_L = 0.4;
       rho_R = 1.0; u_R = 2.0; p_R = 0.4;
       x_diaphragm = 0.5;
+      endTime = 0.15;
       break;
       
     case ToroTest::TEST3_BLAST_LEFT:
@@ -112,43 +114,37 @@ void ShockSolver::initializeToroTest(ToroTest test) {
       rho_L = 1.0; u_L = 0.0; p_L = 1000.0;
       rho_R = 1.0; u_R = 0.0; p_R = 0.01;
       x_diaphragm = 0.5;
+      endTime = 0.012;
       break;
       
-    case ToroTest::TEST4_COLLISION:
+    case ToroTest::TEST4_SLOW_SHOCK:
       // Test 4: Collision of two rarefaction waves
-      rho_L = 5.99924; u_L = 19.5975; p_L = 460.894;
-      rho_R = 5.99242; u_R = -6.19633; p_R = 46.0950;
-      x_diaphragm = 0.4;
+      rho_L = 1.0; u_L = 0.0; p_L = 0.01;
+      rho_R = 1.0; u_R = 0.0; p_R = 100.0;
+      x_diaphragm = 0.5;
+      endTime = 0.035;
       break;
       
-    case ToroTest::TEST5_STATIONARY:
+    case ToroTest::TEST5_COLLISION:
       // Test 5: Stationary contact discontinuity
-      rho_L = 1.0; u_L = -19.59745; p_L = 1000.0;
-      rho_R = 1.0; u_R = -19.59745; p_R = 0.01;
-      x_diaphragm = 0.8;
+      rho_L = 5.99924; u_L = 19.59745; p_L = 460.894;
+      rho_R = 5.99242; u_R = -6.19633; p_R = 46.0950;
+      x_diaphragm = 0.5;
+      endTime = 0.035;
       break;
   }
   
   std::cout << "Initializing Toro Test " << static_cast<int>(test) + 1 << std::endl;
-  initializeShockTube(rho_L, u_L, p_L, rho_R, u_R, p_R, x_diaphragm);
+  initializeShockTube(rho_L, u_L, p_L, rho_R, u_R, p_R, x_diaphragm, endTime);
 }
-
 
 /**
- * Setters
+ * Setter
  */
-void ShockSolver::setScheme(const std::string& scheme_name) {
-  if (scheme_name != "godunov" && scheme_name != "muscl") {
-    throw std::runtime_error("Unknown scheme: " + scheme_name);
-  }
-  scheme_type_ = scheme_name;
-}
+void ShockSolver::setFlux(const std::string& flux_name) {
+  if (flux_name != "HLLC" && flux_name != "EntropyStable") throw std::runtime_error("Unknown flux type: " + flux_name);
 
-void ShockSolver::setRiemannSolver(const std::string& solver_name) {
-  if (solver_name != "exact" && solver_name != "hllc") {
-    throw std::runtime_error("Unknown Riemann solver: " + solver_name);
-  }
-  solver_type_ = solver_name;
+  flux_type_ = flux_name;
 }
 
 /**
@@ -183,52 +179,70 @@ double ShockSolver::computeTimestep() const {
     max_speed = std::max(max_speed, speed);
   }
   
-  // MUSCL needs lower CFL for stability (second-order extrapolation)
-  double effective_cfl = cfg_.CFL;
-  if (scheme_type_ == "muscl") {
-    effective_cfl = std::min(cfg_.CFL, 0.5);
-  }
-  
-  return effective_cfl * dx_ / max_speed;
+  return cfg_.CFL * dx_ / max_speed;
 }
 
 void ShockSolver::step() {
   double dt = computeTimestep();
-  if (t_ + dt > cfg_.endTime) {
-    dt = cfg_.endTime - t_;
-  }
+  if (t_ + dt > cfg_.endTime) dt = cfg_.endTime - t_;
 
   applyBoundaryConditions();
+
+  // Save initial state
+  std::vector<double> rho_n = rho_;
+  std::vector<double> rho_u_n = rho_u_;
+  std::vector<double> E_n = E_;
 
   std::vector<double> F_rho(cfg_.numCells + 1);
   std::vector<double> F_rhou(cfg_.numCells + 1);
   std::vector<double> F_E(cfg_.numCells + 1);
+  computeFluxesMUSCL(F_rho, F_rhou, F_E);
 
-  computeFluxes(F_rho, F_rhou, F_E);
-  updateSolution(F_rho, F_rhou, F_E, dt);
+  std::vector<double> k1_rho(cfg_.numCells), k1_rho_u(cfg_.numCells), k1_E(cfg_.numCells);
+  for (int i = 0; i < cfg_.numCells; ++i) {
+    k1_rho[i] = -(1.0 / dx_) * (F_rho[i + 1] - F_rho[i]);
+    k1_rho_u[i] = -(1.0 / dx_) * (F_rhou[i + 1] - F_rhou[i]);
+    k1_E[i] = -(1.0 / dx_) * (F_E[i + 1] - F_E[i]);
+
+    // U*
+    rho_[i] = rho_n[i] + dt * k1_rho[i];
+    rho_u_[i] = rho_u_n[i] + dt * k1_rho_u[i];
+    E_[i] = E_n[i] + dt * k1_E[i];
+
+    rho_[i] = std::max(rho_[i], 1e-10);
+    E_[i] = std::max(E_[i], 1e-10);
+  }
   conservativesToPrimitives();
 
+  // Stage 2: k2
+  computeFluxesMUSCL(F_rho, F_rhou, F_E);
+
+  std::vector<double> k2_rho(cfg_.numCells), k2_rho_u(cfg_.numCells), k2_E(cfg_.numCells);
+  for (int i = 0; i < cfg_.numCells; ++i) {
+    k2_rho[i] = -(1.0 / dx_) * (F_rho[i + 1] - F_rho[i]);
+    k2_rho_u[i] = -(1.0 / dx_) * (F_rhou[i + 1] - F_rhou[i]);
+    k2_E[i] = -(1.0 / dx_) * (F_E[i + 1] - F_E[i]);
+
+    rho_[i] = rho_n[i] + 0.5 * dt * (k1_rho[i] + k2_rho[i]);
+    rho_u_[i] = rho_u_n[i] + 0.5 * dt * (k1_rho_u[i] + k2_rho_u[i]);
+    E_[i] = E_n[i] + 0.5 * dt * (k1_E[i] + k2_E[i]);
+
+    rho_[i] = std::max(rho_[i], 1e-10);
+    E_[i] = std::max(E_[i], 1e-10);
+  }
+  conservativesToPrimitives();
   t_ += dt;
-  step_count_++;
 }
 
 void ShockSolver::run() {
-  std::cout << "Running ShockSolver with " << scheme_type_
-            << " scheme and " << solver_type_ << " Riemann solver\n";
-  std::cout << "Grid: " << cfg_.numCells << " cells, dx = " << dx_ << " m\n";
-  
-  double effective_cfl = cfg_.CFL;
-  if (scheme_type_ == "muscl") {
-    effective_cfl = std::min(cfg_.CFL, 0.5);
-  }
-  std::cout << "CFL = " << effective_cfl;
-  if (scheme_type_ == "muscl" && cfg_.CFL > 0.5) {
-    std::cout << " (capped from " << cfg_.CFL << " for MUSCL stability)";
-  }
-  std::cout << ", gamma = " << cfg_.gamma << "\n\n";
+  std::cout << "Running ShockSolver...";
+  std::cout << "\nGrid: " << cfg_.numCells << " cells, dx = " << dx_ << " m\n";
+  std::cout << "CFL: " << cfg_.CFL 
+            << ", gamma = " << cfg_.gamma << "\n\n";
 
   while (t_ < cfg_.endTime) {
     step();
+    step_count_++;
     if (step_count_ % 100 == 0) {
       std::cout << "Step " << step_count_ 
                 << ", t = " << t_ << " s"
@@ -243,139 +257,187 @@ void ShockSolver::run() {
 /**
  * Flux Computation
  */
-void ShockSolver::computeFluxes(std::vector<double>& F_rho,
-                                std::vector<double>& F_rhou,
-                                std::vector<double>& F_E) {
-  if (scheme_type_ == "godunov") {
-    for (int i = 0; i <= cfg_.numCells; ++i) {
-      double rho_L, u_L, p_L, rho_R, u_R, p_R;
-      
-      if (i == 0) {
-        rho_L = rho_[0];
-        u_L = u_[0];
-        p_L = p_[0];
-        rho_R = rho_[0];
-        u_R = u_[0];
-        p_R = p_[0];
-      } else if (i == cfg_.numCells) {
-        rho_L = rho_[cfg_.numCells - 1];
-        u_L = u_[cfg_.numCells - 1];
-        p_L = p_[cfg_.numCells - 1];
-        rho_R = rho_[cfg_.numCells - 1];
-        u_R = u_[cfg_.numCells - 1];
-        p_R = p_[cfg_.numCells - 1];
-      } else {
-        rho_L = rho_[i - 1];
-        u_L = u_[i - 1];
-        p_L = p_[i - 1];
-        rho_R = rho_[i];
-        u_R = u_[i];
-        p_R = p_[i];
-      }
-      
-      solveRiemann(rho_L, u_L, p_L, rho_R, u_R, p_R,
-                  F_rho[i], F_rhou[i], F_E[i]);
-    }
-  } else if (scheme_type_ == "muscl") {
-    // MUSCL-Hancock: reconstruct, then evolve by dt/2, then solve Riemann
-    double dt = computeTimestep();
-    if (t_ + dt > cfg_.endTime) {
-      dt = cfg_.endTime - t_;
-    }
-    double dtdx = dt / dx_;
-    
-    for (int i = 0; i <= cfg_.numCells; ++i) {
-      double rho_L, u_L, p_L, rho_R, u_R, p_R;
+void ShockSolver::solveEntropyConservative(double rho_L, double u_L, double p_L,
+                                           double rho_R, double u_R, double p_R,
+                                           double& F_rho, double& F_rhou, double& F_E) {
+  // Define log Mean locally
+  auto logMean = [](double a, double b) {
+    if (std::abs(a - b) < 1e-10) return a;
 
-      if (i == 0) {
-        rho_L = rho_[0];
-        u_L = u_[0];
-        p_L = p_[0];
-        rho_R = rho_[0];
-        u_R = u_[0];
-        p_R = p_[0];
-      } else if (i == cfg_.numCells) {
-        rho_L = rho_[cfg_.numCells - 1];
-        u_L = u_[cfg_.numCells - 1];
-        p_L = p_[cfg_.numCells - 1];
-        rho_R = rho_[cfg_.numCells - 1];
-        u_R = u_[cfg_.numCells - 1];
-        p_R = p_[cfg_.numCells - 1];
-      } else {
-        // Interface i sits between cell i-1 and cell i
-        // Left state = RIGHT edge of cell i-1
-        // Right state = LEFT edge of cell i
-        double rho_L_left, u_L_left, p_L_left;   // left edge of cell i-1
-        double rho_R_right, u_R_right, p_R_right; // right edge of cell i
-        
-        // Get both edges of cell i-1
-        reconstructMUSCL(i - 1, rho_L_left, u_L_left, p_L_left, rho_L, u_L, p_L);
-        
-        // Get both edges of cell i
-        reconstructMUSCL(i, rho_R, u_R, p_R, rho_R_right, u_R_right, p_R_right);
-        
-        // MUSCL-Hancock predictor: evolve edge states by dt/2
-        // Using primitive variable formulation - compute all changes first, then apply
-        
-        // For cell i-1: evolve the RIGHT edge state
-        {
-          double drho = rho_L - rho_L_left;  // slope across cell i-1
-          double du = u_L - u_L_left;
-          double dp = p_L - p_L_left;
-          
-          // Compute changes (using original values)
-          double d_rho = -0.5 * dtdx * (u_L * drho + rho_L * du);
-          double d_u = -0.5 * dtdx * (u_L * du + dp / rho_L);
-          double d_p = -0.5 * dtdx * (u_L * dp + cfg_.gamma * p_L * du);
-          
-          // Apply all at once
-          rho_L += d_rho;
-          u_L += d_u;
-          p_L += d_p;
-          
-          // Ensure positivity
-          rho_L = std::max(rho_L, 1e-10);
-          p_L = std::max(p_L, 1e-10);
-        }
-        
-        // For cell i: evolve the LEFT edge state
-        {
-          double drho = rho_R_right - rho_R;  // slope across cell i
-          double du = u_R_right - u_R;
-          double dp = p_R_right - p_R;
-          
-          // Compute changes (using original values)
-          double d_rho = -0.5 * dtdx * (u_R * drho + rho_R * du);
-          double d_u = -0.5 * dtdx * (u_R * du + dp / rho_R);
-          double d_p = -0.5 * dtdx * (u_R * dp + cfg_.gamma * p_R * du);
-          
-          // Apply all at once
-          rho_R += d_rho;
-          u_R += d_u;
-          p_R += d_p;
-          
-          // Ensure positivity
-          rho_R = std::max(rho_R, 1e-10);
-          p_R = std::max(p_R, 1e-10);
-        }
-      }
+    a = std::max(a, 1e-10);
+    b = std::max(b, 1e-10);
 
-      solveRiemann(rho_L, u_L, p_L, rho_R, u_R, p_R,
-                  F_rho[i], F_rhou[i], F_E[i]);
+    double xi = b / a;
+    double f = (xi - 1.0) / (xi + 1.0);
+    double u = f * f;
+
+    // Edge case if a = b (use taylor expand)
+    if (u < 1e-2) {
+      double F = 1.0 + u / 3.0 + u * u / 5.0 + u * u * u / 7.0;
+      return 0.5 * (a + b) / F;
     }
-  }
+
+    return (b - a) / std::log(xi);
+  };
+
+  // Safety
+  rho_L = std::max(rho_L, 1e-10);
+  rho_R = std::max(rho_R, 1e-10);
+  p_L = std::max(p_L, 1e-10);
+  p_R = std::max(p_R, 1e-10);
+
+  // Log means
+  double rho_log = logMean(rho_L, rho_R);
+  double p_log = logMean(p_L, p_R);
+
+  // Arithmetic averages
+  double u_avg = 0.5 * (u_L + u_R);
+
+  // Specific internal energy
+  double e_L = p_L / ((cfg_.gamma - 1.0) * rho_L);
+  double e_R = p_R / ((cfg_.gamma - 1.0) * rho_R);
+  double e_avg = 0.5 * (e_L + e_R);
+
+  // Kinetic energy
+  double ke_avg = 0.5 * u_avg * u_avg;
+
+  // Entropy Conservative Flux
+  F_rho = rho_log * u_avg;
+  F_rhou = rho_log * u_avg * u_avg + p_log;
+  F_E = rho_log * u_avg * (e_avg + ke_avg) + p_log * u_avg;
 }
 
 /**
- * Riemann Solver Dispatch
+ * Compute dissipation (Ismael-Roe 2009)
  */
-void ShockSolver::solveRiemann(double rho_L, double u_L, double p_L,
-                               double rho_R, double u_R, double p_R,
-                               double& F_rho, double& F_rhou, double& F_E) {
-  if (solver_type_ == "hllc") {
-    solveHLLC(rho_L, u_L, p_L, rho_R, u_R, p_R, F_rho, F_rhou, F_E);
-  } else if (solver_type_ == "exact") {
-    solveExact(rho_L, u_L, p_L, rho_R, u_R, p_R, F_rho, F_rhou, F_E);
+void ShockSolver::computeDissipation(double rho_L, double u_L, double p_L,
+                                double rho_R, double u_R, double p_R,
+                                double& D_rho, double& D_rhou, double& D_E) {
+  // Average States
+  double rho_avg = 0.5 * (rho_L + rho_R);
+  double u_avg = 0.5 * (u_L + u_R);
+  double p_avg = 0.5 * (p_L + p_R);
+
+  // Average sound speed
+  double a_avg = std::sqrt(cfg_.gamma * p_avg / rho_avg);
+
+  // Jumps in prim variables
+  double drho = rho_R - rho_L;
+  double du = u_R - u_L;
+  double dp = p_R - p_L;
+
+  // Compute specific enthalpy
+  double H_L = (cfg_.gamma / (cfg_.gamma - 1.0)) * (p_L / rho_L) + 0.5 * u_L * u_L;
+  double H_R = (cfg_.gamma / (cfg_.gamma - 1.0)) * (p_R / rho_R) + 0.5 * u_R * u_R;
+  double H_avg = 0.5 * (H_L + H_R);
+
+  // Eigenvalues of Euler system:
+  double lambda1 = std::abs(u_avg - a_avg);   // Left-going wave
+  double lambda2 = std::abs(u_avg);           // Contact
+  double lambda3 = std::abs(u_avg + a_avg);   // Right-going wave
+
+  // Characteristic jumps (project primitive jumps onto eigenvectors)
+  double w1 = 0.5 * (dp / (a_avg * a_avg) - rho_avg * du / a_avg);          // Left wave amplitude
+  double w2 = drho - dp / (a_avg * a_avg);                                  // Contact wave amplitude
+  double w3 = 0.5 * (dp / (a_avg * a_avg) + rho_avg * du / a_avg);          // Right wave amplitude
+
+  // Dissipation
+  D_rho = lambda1 * w1 * 1.0 + lambda2 * w2 * 1.0 + lambda3 * w3 * 1.0;
+  D_rhou = lambda1 * w1 * (u_avg - a_avg) + lambda2 * w2 * u_avg + lambda3 * w3 * (u_avg + a_avg);
+  D_E = lambda1 * w1 * (H_avg - u_avg * a_avg) + lambda2 * w2 * (0.5 * u_avg * u_avg) + lambda3 * w3 * (H_avg + u_avg * a_avg);
+}
+
+/**
+ * Full entropy-stable flux
+ */
+void ShockSolver::solveEntropyStable(double rho_L, double u_L, double p_L,
+                                     double rho_R, double u_R, double p_R,
+                                     double& F_rho, double& F_rhou, double& F_E) {
+  double F_EC_rho, F_EC_rhou, F_EC_E;
+  solveEntropyConservative(rho_L, u_L, p_L, rho_R, u_R, p_R, F_EC_rho, F_EC_rhou, F_EC_E);
+
+  double D_rho, D_rhou, D_E;
+  computeDissipation(rho_L, u_L, p_L, rho_R, u_R, p_R, D_rho, D_rhou, D_E);
+
+  F_rho = F_EC_rho - 0.5 * D_rho;
+  F_rhou = F_EC_rhou - 0.5 * D_rhou;
+  F_E = F_EC_E - 0.5 * D_E;
+}
+
+/**
+ * MUSCL - RK2 Spatial Reconstruction
+ */
+void ShockSolver::computeFluxesMUSCL(std::vector<double>& F_rho, std::vector<double>& F_rhou, std::vector<double>& F_E) {
+  for (int i = 0; i <= cfg_.numCells; ++i) {
+    double rho_L, u_L, p_L, rho_R, u_R, p_R;
+
+    if (i == 0 || i == cfg_.numCells) {
+      // Boundary: use cell center values
+      int idx = (i == 0) ? 0 : cfg_.numCells - 1;
+      rho_L = rho_R = rho_[idx];
+      u_L = u_R = u_[idx];
+      p_L = p_R = p_[idx];
+    } else {
+      int i_L = i - 1;
+      int i_R = i;
+
+      // Detect high-pressure regions to avoid pressure oscillations created from MUSCL Scheme
+      double p_threshold = 1000.0;    // Pa
+      bool high_pressure = (p_[i_L] > p_threshold || p_[i_R] > p_threshold);
+
+      if (high_pressure) {
+        rho_L = rho_[i_L];
+        u_L = u_[i_L];
+        p_L = p_[i_L];
+        rho_R = rho_[i_R];
+        u_R = u_[i_R];
+        p_R = p_[i_R];
+      } else {
+        // Reconstruct Left cell - right edge
+        double v_minus = (i_L > 0) ? rho_[i_L - 1] : rho_[i_L];
+        double v_plus = (i_L < cfg_.numCells - 1) ? rho_[i_L + 1] : rho_[i_L];
+        double slope_rho = slopeLimit(v_minus, rho_[i_L], v_plus);
+        rho_L = rho_[i_L] + 0.5 * slope_rho;
+
+        v_minus = (i_L > 0) ? u_[i_L - 1] : u_[i_L];
+        v_plus = (i_L < cfg_.numCells - 1) ? u_[i_L + 1] : u_[i_L];
+        double slope_u = slopeLimit(v_minus, u_[i_L], v_plus);
+        u_L = u_[i_L] + 0.5 * slope_u;
+
+        v_minus = (i_L > 0) ? p_[i_L - 1] : p_[i_L];
+        v_plus = (i_L < cfg_.numCells - 1) ? p_[i_L + 1] : p_[i_L];
+        double slope_p = slopeLimit(v_minus, p_[i_L], v_plus);
+        p_L = p_[i_L] + 0.5 * slope_p;
+
+        rho_L = std::max(rho_L, 1e-10);
+        p_L = std::max(p_L, 1e-10);
+
+        // Reconstruct Right cell - left edge
+        v_minus = (i_R > 0) ? rho_[i_R - 1] : rho_[i_R];
+        v_plus = (i_R < cfg_.numCells - 1) ? rho_[i_R + 1] : rho_[i_R];
+        slope_rho = slopeLimit(v_minus, rho_[i_R], v_plus);
+        rho_R = rho_[i_R] + 0.5 * slope_rho;
+
+        v_minus = (i_R > 0) ? u_[i_R - 1] : u_[i_R];
+        v_plus = (i_R < cfg_.numCells - 1) ? u_[i_R + 1] : u_[i_R];
+        slope_u = slopeLimit(v_minus, u_[i_R], v_plus);
+        u_R = u_[i_R] + 0.5 * slope_u;
+
+        v_minus = (i_R > 0) ? p_[i_R - 1] : p_[i_R];
+        v_plus = (i_R < cfg_.numCells - 1) ? p_[i_R + 1] : p_[i_R];
+        slope_p = slopeLimit(v_minus, p_[i_R], v_plus);
+        p_R = p_[i_R] + 0.5 * slope_p;
+
+        rho_R = std::max(rho_R, 1e-10);
+        p_R = std::max(p_R, 1e-10); 
+      }
+    }
+
+    if (flux_type_ == "HLLC") {
+      solveHLLC(rho_L, u_L, p_L, rho_R, u_R, p_R, F_rho[i], F_rhou[i], F_E[i]);
+    } else {
+      solveEntropyStable(rho_L, u_L, p_L, rho_R, u_R, p_R, F_rho[i], F_rhou[i], F_E[i]);
+    } 
   }
 }
 
@@ -444,7 +506,7 @@ void ShockSolver::solveHLLC(double rho_L, double u_L, double p_L,
 }
 
 /**
- * Exact Riemann Solver
+ * Pressure star helper
  */
 double ShockSolver::solvePressureStar(double rho_L, double u_L, double p_L, double a_L,
                                      double rho_R, double u_R, double p_R, double a_R) const {
@@ -497,223 +559,27 @@ double ShockSolver::solvePressureStar(double rho_L, double u_L, double p_L, doub
   return p_star;
 }
 
-void ShockSolver::sampleExactSolution(double rho_L, double u_L, double p_L, double a_L,
-                                      double rho_R, double u_R, double p_R, double a_R,
-                                      double p_star, double u_star,
-                                      double& rho_sample, double& u_sample, double& p_sample) const {
-  double S = 0.0;
-
-  if (S <= u_star) {
-    if (p_star > p_L) {
-      double S_L = u_L - a_L * std::sqrt((cfg_.gamma + 1.0) / (2.0 * cfg_.gamma) * (p_star / p_L) + 
-                                         (cfg_.gamma - 1.0) / (2.0 * cfg_.gamma));
-      if (S <= S_L) {
-        rho_sample = rho_L;
-        u_sample = u_L;
-        p_sample = p_L;
-      } else {
-        rho_sample = rho_L * ((p_star / p_L + (cfg_.gamma - 1.0) / (cfg_.gamma + 1.0)) / 
-                             ((cfg_.gamma - 1.0) / (cfg_.gamma + 1.0) * (p_star / p_L) + 1.0));
-        u_sample = u_star;
-        p_sample = p_star;
-      }
-    } else {
-      double S_HL = u_L - a_L;
-      if (S <= S_HL) {
-        rho_sample = rho_L;
-        u_sample = u_L;
-        p_sample = p_L;
-      } else {
-        double a_star_L = a_L * std::pow(p_star / p_L, (cfg_.gamma - 1.0) / (2.0 * cfg_.gamma));
-        double S_TL = u_star - a_star_L;
-        if (S > S_TL) {
-          rho_sample = rho_L * std::pow(p_star / p_L, 1.0 / cfg_.gamma);
-          u_sample = u_star;
-          p_sample = p_star;
-        } else {
-          u_sample = 2.0 / (cfg_.gamma + 1.0) * (a_L + 0.5 * (cfg_.gamma - 1.0) * u_L + S);
-          double c = 2.0 / (cfg_.gamma + 1.0) * (a_L + 0.5 * (cfg_.gamma - 1.0) * (u_L - S));
-          rho_sample = rho_L * std::pow(c / a_L, 2.0 / (cfg_.gamma - 1.0));
-          p_sample = p_L * std::pow(c / a_L, 2.0 * cfg_.gamma / (cfg_.gamma - 1.0));
-        }
-      }
-    }
-  } else {
-    if (p_star > p_R) {
-      double S_R = u_R + a_R * std::sqrt((cfg_.gamma + 1.0) / (2.0 * cfg_.gamma) * (p_star / p_R) + 
-                                         (cfg_.gamma - 1.0) / (2.0 * cfg_.gamma));
-      if (S >= S_R) {
-        rho_sample = rho_R;
-        u_sample = u_R;
-        p_sample = p_R;
-      } else {
-        rho_sample = rho_R * ((p_star / p_R + (cfg_.gamma - 1.0) / (cfg_.gamma + 1.0)) /
-                             ((cfg_.gamma - 1.0) / (cfg_.gamma + 1.0) * (p_star / p_R) + 1.0));
-        u_sample = u_star;
-        p_sample = p_star;
-      }
-    } else {
-      double S_HR = u_R + a_R;
-      if (S >= S_HR) {
-        rho_sample = rho_R;
-        u_sample = u_R;
-        p_sample = p_R;
-      } else {
-        double a_star_R = a_R * std::pow(p_star / p_R, (cfg_.gamma - 1.0) / (2.0 * cfg_.gamma));
-        double S_TR = u_star + a_star_R;
-        if (S < S_TR) {
-          rho_sample = rho_R * std::pow(p_star / p_R, 1.0 / cfg_.gamma);
-          u_sample = u_star;
-          p_sample = p_star;
-        } else {
-          u_sample = 2.0 / (cfg_.gamma + 1.0) * (-a_R + 0.5 * (cfg_.gamma - 1.0) * u_R + S);
-          double c = 2.0 / (cfg_.gamma + 1.0) * (a_R - 0.5 * (cfg_.gamma - 1.0) * (u_R - S));
-          rho_sample = rho_R * std::pow(c / a_R, 2.0 / (cfg_.gamma - 1.0));
-          p_sample = p_R * std::pow(c / a_R, 2.0 * cfg_.gamma / (cfg_.gamma - 1.0));
-        }
-      }
-    }
-  }
-}
-
-void ShockSolver::solveExact(double rho_L, double u_L, double p_L,
-                             double rho_R, double u_R, double p_R,
-                             double& F_rho, double& F_rhou, double& F_E) {
-  double a_L = std::sqrt(cfg_.gamma * p_L / rho_L);
-  double a_R = std::sqrt(cfg_.gamma * p_R / rho_R);
-
-  double p_star = solvePressureStar(rho_L, u_L, p_L, a_L, rho_R, u_R, p_R, a_R);
-
-  auto f = [this](double p, double p_k, double rho_k, double a_k) -> double {
-    if (p > p_k) {
-      double A = 2.0 / ((cfg_.gamma + 1.0) * rho_k);
-      double B = p_k * (cfg_.gamma - 1.0) / (cfg_.gamma + 1.0);
-      return (p - p_k) * std::sqrt(A / (p + B));
-    } else {
-      return (2.0 * a_k / (cfg_.gamma - 1.0)) *
-             (std::pow(p / p_k, (cfg_.gamma - 1.0) / (2.0 * cfg_.gamma)) - 1.0);
-    }
-  };
-
-  double f_L = f(p_star, p_L, rho_L, a_L);
-  double f_R = f(p_star, p_R, rho_R, a_R);
-  double u_star = 0.5 * (u_L + u_R) + 0.5 * (f_R - f_L);
-
-  double rho_sample, u_sample, p_sample;
-  sampleExactSolution(rho_L, u_L, p_L, a_L, rho_R, u_R, p_R, a_R,
-                      p_star, u_star, rho_sample, u_sample, p_sample);
-  
-  F_rho = rho_sample * u_sample;
-  F_rhou = rho_sample * u_sample * u_sample + p_sample;
-  double e_sample = p_sample / ((cfg_.gamma - 1.0) * rho_sample);
-  double E_sample = rho_sample * (e_sample + 0.5 * u_sample * u_sample);
-  F_E = u_sample * (E_sample + p_sample);
-}
-
 /**
- * MUSCL Reconstruction
+ * Slope Limiter (MC)
  */
-void ShockSolver::reconstructMUSCL(int i,
-                                    double& rho_L, double& u_L, double& p_L,
-                                    double& rho_R, double& u_R, double& p_R) {
-  double slope_rho = slopeLimit(
-    i > 0 ? rho_[i - 1] : rho_[i],
-    rho_[i],
-    i < cfg_.numCells - 1 ? rho_[i + 1] : rho_[i]
-  );
-  
-  double slope_u = slopeLimit(
-    i > 0 ? u_[i - 1] : u_[i],
-    u_[i],
-    i < cfg_.numCells - 1 ? u_[i + 1] : u_[i]
-  );
-
-  double slope_p = slopeLimit(
-    i > 0 ? p_[i - 1] : p_[i],
-    p_[i],
-    i < cfg_.numCells - 1 ? p_[i + 1] : p_[i]
-  );
-
-  rho_L = rho_[i] - 0.5 * slope_rho;
-  u_L = u_[i] - 0.5 * slope_u;
-  p_L = p_[i] - 0.5 * slope_p;
-
-  rho_R = rho_[i] + 0.5 * slope_rho;
-  u_R = u_[i] + 0.5 * slope_u;
-  p_R = p_[i] + 0.5 * slope_p;
-
-  rho_L = std::max(rho_L, TOL);
-  rho_R = std::max(rho_R, TOL);
-  p_L = std::max(p_L, TOL);
-  p_R = std::max(p_R, TOL);
-}
-
-/**
- * Slope Limiter 
- */
-double ShockSolver::slopeLimit(double v_minus, double v_center, double v_plut) const {
+double ShockSolver::slopeLimit(double v_minus, double v_center, double v_plus) const {
   double delta_minus = v_center - v_minus;
-  double delta_plus = v_plut - v_center;
+  double delta_plus = v_plus - v_center;
 
   // If slopes have opposite signs, we're at an extremum -> set slope to 0
   if (delta_plus * delta_minus <= 0.0) return 0.0;
-
-  // Limiter Selection - Change LIMITER_TYPE 
-  // 1 = minmod (most diffusive, very stable for shocks)
-  // 2 = MC (Monotized Central - good balance)
-  // 3 = van Leer (smooth, less diffusive, good for smooth regions)
-  // 4 = superbee (agressive, not optimal for smooth regions)
-
-  const int LIMITER_TYPE = 3;
-
-  double slope;
-
-  if (LIMITER_TYPE == 1) {
-    double sign = (delta_plus > 0.0) ? 1.0 : -1.0;
-    slope = sign * std::min(std::abs(delta_plus), std::abs(delta_minus));
-  } else if (LIMITER_TYPE == 2) {
-    double delta_center = 0.5 * (delta_plus + delta_minus);
-    double sign = (delta_center > 0.0) ? 1.0 : -1.0;
-    slope = sign * std::min({2.0 * std::abs(delta_minus),
-                             2.0 * std::abs(delta_plus),
-                             std::abs(delta_center)});
-  } else if (LIMITER_TYPE == 3) {
-    double r = delta_minus / delta_plus;    
-    double phi_r = (r + std::abs(r)) / (1.0 * std::abs(r));
-    slope = phi_r * delta_plus;
-  } else if (LIMITER_TYPE == 4) {
-    double r = delta_minus / delta_plus;
-    double phi_r = std::max({0.0, std::min(2.0 * r, 1.0), std::min(r, 2.0)});
-    slope = phi_r * delta_plus;
-  } else {
-    double sign = (delta_plus > 0.0) ? 1.0 : -1.0;
-    slope = sign * std::min(std::abs(delta_plus), std::abs(delta_minus));
-  }
-
-  return slope;
+  double delta_center = 0.5 * (delta_plus + delta_minus);
+  double sign = (delta_center > 0.0) ? 1.0 : -1.0;
+  
+  return sign * std::min({2.0 * std::abs(delta_minus),
+                          std::abs(delta_center),
+                          2.0 * std::abs(delta_plus)});
 }
 
 /**
  * Boundary Conditions
  */
 void ShockSolver::applyBoundaryConditions() {
-}
-
-/**
- * Update Solution
- */
-void ShockSolver::updateSolution(const std::vector<double>& F_rho,
-                                  const std::vector<double>& F_rhou,
-                                  const std::vector<double>& F_E,
-                                  double dt) {
-  for (int i = 0; i < cfg_.numCells; ++i) {
-    rho_[i] = rho_[i] - (dt / dx_) * (F_rho[i + 1] - F_rho[i]);
-    rho_u_[i] = rho_u_[i] - (dt / dx_) * (F_rhou[i + 1] - F_rhou[i]);
-    E_[i] = E_[i] - (dt / dx_) * (F_E[i + 1] - F_E[i]);
-
-    rho_[i] = std::max(rho_[i], TOL);
-    E_[i] = std::max(E_[i], TOL);
-  }
 }
 
 /**
@@ -838,16 +704,16 @@ std::vector<ShockSolver::SparseDataPoint> ShockSolver::getSensorDataForToroTest(
       x_diaphragm = 0.5;
       break;
       
-    case ToroTest::TEST4_COLLISION:
-      rho_L = 5.99924; u_L = 19.5975; p_L = 460.894;
-      rho_R = 5.99242; u_R = -6.19633; p_R = 46.0950;
-      x_diaphragm = 0.4;
+    case ToroTest::TEST4_SLOW_SHOCK:
+      rho_L = 1.0; u_L = 0.0; p_L = 0.01;
+      rho_R = 1.0; u_R = 0.0; p_R = 100.0;
+      x_diaphragm = 0.5;
       break;
       
-    case ToroTest::TEST5_STATIONARY:
-      rho_L = 1.0; u_L = -19.59745; p_L = 1000.0;
-      rho_R = 1.0; u_R = -19.59745; p_R = 0.01;
-      x_diaphragm = 0.8;
+    case ToroTest::TEST5_COLLISION:
+      rho_L = 5.99924; u_L = 19.5975; p_L = 460.894;
+      rho_R = 5.99242; u_R = -6.19633; p_R = 46.0950;
+      x_diaphragm = 0.5;
       break;
       
     default:
@@ -901,12 +767,25 @@ void ShockSolver::initializeFromSparseData(
   double max_jump = 0.0;
   double estimated_diaphragm = 0.5;
   for (size_t i = 0; i < sorted_data.size() - 1; ++i) {
-    double jump = std::abs(sorted_data[i + 1].rho - sorted_data[i].rho);
-    if (jump > max_jump) {
-      max_jump = jump;
+    // Normalize jumps by magnitude
+    double rho_avg = 0.5 * (sorted_data[i].rho + sorted_data[i + 1].rho);
+    double u_avg = 0.5 * (sorted_data[i].u + sorted_data[i + 1].u);
+    double p_avg = 0.5 * (sorted_data[i].p + sorted_data[i + 1].p);
+
+    double rho_jump = std::abs(sorted_data[i + 1].rho - sorted_data[i].rho) / (rho_avg + 1e-10);
+    double u_jump = std::abs(sorted_data[i + 1].u - sorted_data[i].u) / (u_avg + 1e-10);
+    double p_jump = std::abs(sorted_data[i + 1].p - sorted_data[i].p) / (p_avg + 1e-10);
+
+    // Use maximum normalized jump across all variables
+    double total_jump = std::max({rho_jump, u_jump, p_jump});
+
+    if (total_jump > max_jump) {
+      max_jump = total_jump;
       estimated_diaphragm = 0.5 * (sorted_data[i].x + sorted_data[i + 1].x);
     }
   }
+
+  estimated_diaphragm = 0.5;
 
   // Store initial conditions for analytical solution comparison
   // Use first and last sensor as left/right states

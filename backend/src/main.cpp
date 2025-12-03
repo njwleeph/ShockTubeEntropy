@@ -85,7 +85,7 @@ void handleCreateSimulation(const httplib::Request& req, httplib::Response& res)
     cfg.length = body.value("length", 1.0);
     cfg.numCells = body.value("numCells", 1000);
     cfg.gamma = body.value("gamma", 1.4);
-    cfg.CFL = body.value("CFL", 0.9);
+    cfg.CFL = body.value("CFL", 0.5);
     cfg.endTime = body.value("endTime", 0.2);
 
     std::cout << "Creating solver with config:" << std::endl;
@@ -141,20 +141,22 @@ void handleInitShockTube(const httplib::Request& req, httplib::Response& res) {
     double u_R = body.value("u_R", 0.0);
     double p_R = body.value("p_R", 0.1);
     double x_diaphragm = body.value("x_diaphragm", 0.5);
+    double endTime = body.value("endTime", 0.25);
 
     std::cout << "Initializing shock tube:" << std::endl;
     std::cout << "  Left:  rho=" << rho_L << ", u=" << u_L << ", p=" << p_L << std::endl;
     std::cout << "  Right: rho=" << rho_R << ", u=" << u_R << ", p=" << p_R << std::endl;
     std::cout << "  Diaphragm: " << x_diaphragm << std::endl;
 
-    g_solver->initializeShockTube(rho_L, u_L, p_L, rho_R, u_R, p_R, x_diaphragm);
+    g_solver->initializeShockTube(rho_L, u_L, p_L, rho_R, u_R, p_R, x_diaphragm, endTime);
     std::cout << "Shock tube initialized" << std::endl;
 
     json response = successResponse("Shock tube initialized");
     response["initial_conditions"] = {
       {"left", {{"rho", rho_L}, {"u", u_L}, {"p", p_L}}},
       {"right", {{"rho", rho_R}, {"u", u_R}, {"p", p_R}}},
-      {"diaphragm", x_diaphragm}
+      {"diaphragm", x_diaphragm},
+      {"end time", endTime}
     };
 
     res.set_content(response.dump(), "application/json");
@@ -188,8 +190,8 @@ void handleInitToro(const httplib::Request& req, httplib::Response& res) {
       case 1: test = ShockSolver::ToroTest::TEST1_SOD; break;
       case 2: test = ShockSolver::ToroTest::TEST2_123; break;
       case 3: test = ShockSolver::ToroTest::TEST3_BLAST_LEFT; break;
-      case 4: test = ShockSolver::ToroTest::TEST4_COLLISION; break;
-      case 5: test = ShockSolver::ToroTest::TEST5_STATIONARY; break;
+      case 4: test = ShockSolver::ToroTest::TEST4_SLOW_SHOCK; break;
+      case 5: test = ShockSolver::ToroTest::TEST5_COLLISION; break;
       default: test = ShockSolver::ToroTest::TEST1_SOD;
     }
 
@@ -247,26 +249,21 @@ void handleConfigure(const httplib::Request& req, httplib::Response& res) {
     }
 
     auto body = json::parse(req.body);
-    std::cout << "Request body: " << body.dump(2) << std::endl;
+    std::cout << "Request body: " << body.dump(1) << std::endl;
 
-    std::string scheme = body.value("scheme", "godunov");
-    std::string riemann_solver = body.value("riemann_solver", "hllc");
+    std::string flux = body.value("flux", "HLLC");
 
-    std::cout << "Configuring:" << std::endl;
-    std::cout << "  Scheme: " << scheme << std::endl;
-    std::cout << "  Riemann solver: " << riemann_solver << std::endl;
+    std::cout << "Configuring: " << std::endl;
+    std::cout << "  Flux: " << flux << std::endl;
 
-    g_solver->setScheme(scheme);
-    g_solver->setRiemannSolver(riemann_solver);
+    g_solver->setFlux(flux);
     std::cout << "Configuration updated" << std::endl;
 
     json response = successResponse("Configuration updated");
-    response["scheme"] = scheme;
-    response["riemann_solver"] = riemann_solver;
+    response["fluxType"] = flux;
 
     res.set_content(response.dump(), "application/json");
     std::cout << "Response sent" << std::endl;
-    
   } catch (const std::exception& e) {
     std::cerr << "ERROR in handleConfigure: " << e.what() << std::endl;
     res.status = 400;
@@ -580,8 +577,8 @@ void handleGetToroSensorData(const httplib::Request& req, httplib::Response& res
       case 1: test = ShockSolver::ToroTest::TEST1_SOD; break;
       case 2: test = ShockSolver::ToroTest::TEST2_123; break;
       case 3: test = ShockSolver::ToroTest::TEST3_BLAST_LEFT; break;
-      case 4: test = ShockSolver::ToroTest::TEST4_COLLISION; break;
-      case 5: test = ShockSolver::ToroTest::TEST5_STATIONARY; break;
+      case 4: test = ShockSolver::ToroTest::TEST4_SLOW_SHOCK; break;
+      case 5: test = ShockSolver::ToroTest::TEST5_COLLISION; break;
       default: test = ShockSolver::ToroTest::TEST1_SOD; 
     }
 
@@ -730,7 +727,7 @@ int main() {
   std::cout << "  POST   /api/simulation/init/shocktube - Initialize shock tube" << std::endl;
   std::cout << "  POST   /api/simulation/init/toro      - Initialize Toro tests" << std::endl;
   std::cout << "  POST   /api/simulation/init/sparse    - Initialize from sparse sensor data" << std::endl;
-  std::cout << "  POST   /api/simulation/configure      - Set scheme/solver" << std::endl;
+  std::cout << "  POST   /api/simulation/configure      - Configure flux type" << std::endl;
   std::cout << "  POST   /api/simulation/sensors/place  - Place sensors" << std::endl;
   std::cout << "  POST   /api/simulation/run            - Run full simulation" << std::endl;
   std::cout << "  POST   /api/simulation/step           - Step N timesteps" << std::endl;

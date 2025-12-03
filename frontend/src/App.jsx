@@ -7,15 +7,22 @@ const ShockTubeSimulator = () => {
   const [config, setConfig] = useState({
     numCells: 1000,
     gamma: 1.4,
-    CFL: 0.9,
-    endTime: 0.2,
-    scheme: 'muscl',
-    riemannSolver: 'hllc',
+    CFL: 0.5,
+    endTime: 0.25,
+    fluxType: 'HLLC',
     interpolation: 'piecewise_constant'
   });
 
   // Toro test selection
   const [selectedTest, setSelectedTest] = useState(1);
+
+  const TORO_TEST_END_TIMES = {
+    1: 0.25,    // SOD
+    2: 0.15,    // 123
+    3: 0.012,   // Blast Left
+    4: 0.035,   // Slow Shock
+    5: 0.035    // Collision
+  };
 
   // Sensor data
   const [sensors, setSensors] = useState([
@@ -52,6 +59,11 @@ const ShockTubeSimulator = () => {
       
       if (data.success) {
         setSensors(data.sensors);
+
+        const newEndTime = TORO_TEST_END_TIMES[selectedTest];
+        setConfig(prev => ({ ...prev, endTime: newEndTime }));
+
+        console.log(`Loaded Test ${selectedTest} with endTime = ${newEndTime}s`);
       }
     } catch (error) {
       console.error('Error loading Toro test:', error);
@@ -84,10 +96,7 @@ const ShockTubeSimulator = () => {
       await fetch(`${API_URL}/api/simulation/configure`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scheme: config.scheme,
-          riemann_solver: config.riemannSolver
-        })
+        body: JSON.stringify({ flux: config.fluxType })
       });
 
       // Initialize from sparse data
@@ -572,8 +581,8 @@ const ShockTubeSimulator = () => {
               <option value={1}>Test 1: Sod Problem</option>
               <option value={2}>Test 2: 123 Problem</option>
               <option value={3}>Test 3: Blast Wave</option>
-              <option value={4}>Test 4: Collision</option>
-              <option value={5}>Test 5: Stationary Contact</option>
+              <option value={4}>Test 4: Slow Shock</option>
+              <option value={5}>Test 5: Collision</option>
             </select>
             <button
               style={{ ...styles.button, ...styles.buttonSecondary }}
@@ -660,25 +669,14 @@ const ShockTubeSimulator = () => {
               </select>
             </div>
             <div>
-              <div style={styles.label}>Scheme</div>
+              <div style={styles.label}>Flux Type</div>
               <select
                 style={{ ...styles.select, width: '100%' }}
-                value={config.scheme}
-                onChange={(e) => setConfig({ ...config, scheme: e.target.value })}
+                value={config.fluxType}
+                onChange={(e) => setConfig({ ...config, fluxType: e.target.value })}
               >
-                <option value="godunov">Godunov</option>
-                <option value="muscl">MUSCL</option>
-              </select>
-            </div>
-            <div>
-              <div style={styles.label}>Riemann Solver</div>
-              <select
-                style={{ ...styles.select, width: '100%' }}
-                value={config.riemannSolver}
-                onChange={(e) => setConfig({ ...config, riemannSolver: e.target.value })}
-              >
-                <option value="hllc">HLLC</option>
-                <option value="exact">Exact</option>
+                <option value="HLLC">HLLC</option>
+                <option value="EntropyStable">Entropy Stable (Ismael-Roe)</option>
               </select>
             </div>
             <div>
@@ -835,12 +833,8 @@ const ShockTubeSimulator = () => {
         <div style={styles.sidebarSection}>
           <div style={styles.sectionTitle}>Configuration</div>
           <div style={styles.valueRow}>
-            <span style={styles.valueLabel}>Scheme</span>
-            <span style={styles.valueData}>{config.scheme.toUpperCase()}</span>
-          </div>
-          <div style={styles.valueRow}>
-            <span style={styles.valueLabel}>Riemann Solver</span>
-            <span style={styles.valueData}>{config.riemannSolver.toUpperCase()}</span>
+            <span style={styles.valueLabel}>Flux</span>
+            <span style={styles.valueData}>{config.fluxType.toUpperCase()}</span>
           </div>
           <div style={styles.valueRow}>
             <span style={styles.valueLabel}>CFL</span>

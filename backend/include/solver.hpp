@@ -13,7 +13,7 @@ public:
     double length = 1.0;
     int numCells = 1000;
     double gamma = 1.4;
-    double CFL = 0.9;
+    double CFL = 0.5;
     double endTime = 0.2;
   };
 
@@ -88,8 +88,8 @@ public:
     TEST1_SOD,
     TEST2_123,
     TEST3_BLAST_LEFT,
-    TEST4_COLLISION,
-    TEST5_STATIONARY
+    TEST4_SLOW_SHOCK,
+    TEST5_COLLISION
   };
 
   /**
@@ -102,7 +102,7 @@ public:
    */
   void initializeShockTube(double rho_L, double u_L, double p_L,
                            double rho_R, double u_R, double p_R,
-                           double x_diaphragm = 0.5);
+                           double x_diaphragm = 0.5, double endTime = 0.25);
   void initializeCustom(const std::vector<PrimitiveVars>& initial);
   void initializeToroTest(ToroTest test);
   void initializeFromSparseData(const std::vector<SparseDataPoint>& sparse_data,
@@ -116,10 +116,9 @@ public:
     const std::vector<double>& sensor_positions);
 
   /**
-   * Configuration setters
+   * Setter
    */
-  void setScheme(const std::string& scheme_name);
-  void setRiemannSolver(const std::string& solver_name);
+  void setFlux(const std::string& flux_name);
 
   /**
    * Simulation control
@@ -165,40 +164,29 @@ private:
   double computeTimestep() const;
   void applyBoundaryConditions();
 
-  void computeFluxes(std::vector<double>& F_rho,
-                     std::vector<double>& F_rhou,
-                     std::vector<double>& F_E);
-
-  void solveRiemann(double rho_L, double u_L, double p_L,
-                    double rho_R, double u_R, double p_R,
-                    double& F_rho, double& F_rhou, double& F_E);
-
   void solveHLLC(double rho_L, double u_L, double p_L,
                  double rho_R, double u_R, double p_R,
                  double& F_rho, double& F_rhou, double& F_E);
 
-  void solveExact(double rho_L, double u_L, double p_L,
-                  double rho_R, double u_R, double p_R,
-                  double& F_rho, double& F_rhou, double& F_E);
-
   double solvePressureStar(double rho_L, double u_L, double p_L, double a_L,
                            double rho_R, double u_R, double p_R, double a_R) const;
 
-  void sampleExactSolution(double rho_L, double u_L, double p_L, double a_L,
-                           double rho_R, double u_R, double p_R, double a_R,
-                           double p_star, double u_star,
-                           double& rho_sample, double& u_sample, double& p_sample) const;
-
-  void reconstructMUSCL(int i,
-                        double& rho_L, double& u_L, double& p_L,
-                        double& rho_R, double& u_R, double& p_R);
-
   double slopeLimit(double v_minus, double v_center, double v_plus) const;
 
-  void updateSolution(const std::vector<double>& F_rho,
-                      const std::vector<double>& F_rhou,
-                      const std::vector<double>& F_E,
-                      double dt);
+  void solveEntropyConservative(double rho_L, double u_L, double p_L,
+                                double rho_R, double u_R, double p_R,
+                                double& F_rho, double& F_rhou, double& F_E);
+
+  void solveEntropyStable(double rho_L, double u_L, double p_L,
+                          double rho_R, double u_R, double p_R,
+                          double& F_rho, double& F_rhou, double& F_E);
+
+  void computeDissipation(double rho_L, double u_L, double p_L,
+                          double rho_R, double u_R, double p_R,
+                          double& D_rho, double& D_rhou, double& D_E);
+
+  void computeFluxesMUSCL(std::vector<double>& F_rho, std::vector<double>& F_rhou, std::vector<double>& F_E);
+                          
 
   /**
    * Member variables
@@ -208,8 +196,7 @@ private:
   double t_;
   int step_count_;
 
-  std::string scheme_type_;
-  std::string solver_type_;
+  std::string flux_type_;
 
   // Primitive variables
   std::vector<double> rho_;
@@ -232,6 +219,7 @@ private:
     double rho_L, u_L, p_L;
     double rho_R, u_R, p_R;
     double x_diaphragm;
+    double endTime;
     bool is_valid;
   } initial_conditions_;
 
