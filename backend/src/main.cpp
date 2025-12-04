@@ -461,6 +461,47 @@ void handleGetSensorReadings(const httplib::Request& req, httplib::Response& res
 }
 
 /**
+ * GET /api/simulation/sensors/analytical
+ * Get analytical (exact Riemann) solution at sensor positions
+ * This is the "ground truth" for anomaly detection comparison
+ */
+void handleGetAnalyticalAtSensors(const httplib::Request& req, httplib::Response& res) {
+  try {
+    std::cout << "\n>>> GET /api/simulation/sensors/analytical" << std::endl;
+
+    if (!g_solver) {
+      res.status = 400;
+      res.set_content(errorResponse("Simulation not created").dump(), "application/json");
+      return;
+    }
+
+    auto readings = g_solver->getAnalyticalAtSensors();
+
+    json response;
+    response["success"] = true;
+    response["time"] = g_solver->getCurrentTime();
+    response["readings"] = json::array();
+
+    for (const auto& reading : readings) {
+      json r;
+      r["position"] = reading.position;
+      r["density"] = reading.density;
+      r["velocity"] = reading.velocity;
+      r["pressure"] = reading.pressure;
+      r["entropy"] = reading.entropy;
+      response["readings"].push_back(r);
+    }
+
+    res.set_content(response.dump(), "application/json");
+    std::cout << "Returned analytical solution at " << readings.size() << " sensor positions" << std::endl;
+  } catch (const std::exception& e) {
+    std::cerr << "ERROR in handleGetAnalyticalAtSensors: " << e.what() << std::endl;
+    res.status = 500;
+    res.set_content(errorResponse(e.what()).dump(), "application/json");
+  }
+}
+
+/**
  * GET /api/simulation/validate
  * Validate numerical solution against analytical solution
  */
@@ -610,6 +651,12 @@ void handleGetToroSensorData(const httplib::Request& req, httplib::Response& res
 /**
  * POST /api/simulation/init/sparse
  * Initialize from sparse sensor data
+ * 
+ * Body: {
+ *   "sensors": [{"x": 0.1, "rho": 1.0, "u": 0.0, "p": 1.0}, ...],
+ *   "interpolation": "piecewise_constant",  // or "linear", "characteristic"
+ *   "diaphragm_x": 0.5  // optional, -1 or omit for auto-detect
+ * }
  */
 void handleInitSparse(const httplib::Request& req, httplib::Response& res) {
   try {
@@ -622,7 +669,8 @@ void handleInitSparse(const httplib::Request& req, httplib::Response& res) {
     }
 
     auto body = json::parse(req.body);
-    std::string interpolation = body.value("interpolation", "linear");
+    std::string interpolation = body.value("interpolation", "piecewise_constant");
+    double diaphragm_x = body.value("diaphragm_x", -1.0);
 
     std::vector<ShockSolver::SparseDataPoint> sparse_data;
     for (const auto& sensor : body["sensors"]) {
@@ -636,12 +684,14 @@ void handleInitSparse(const httplib::Request& req, httplib::Response& res) {
 
     std::cout << "Initializing from " << sparse_data.size() << " sensors" << std::endl;
     std::cout << "Interpolation: " << interpolation << std::endl;
+    std::cout << "Diaphragm x: " << (diaphragm_x < 0 ? "auto-detect" : std::to_string(diaphragm_x)) << std::endl;
 
-    g_solver->initializeFromSparseData(sparse_data, interpolation);
+    g_solver->initializeFromSparseData(sparse_data, interpolation, diaphragm_x);
 
     json response = successResponse("Initialized from sparse data");
     response["num_sensors"] = sparse_data.size();
     response["interpolation"] = interpolation;
+    response["diaphragm_x"] = diaphragm_x;
     
     res.set_content(response.dump(), "application/json");
   } catch (const std::exception& e) {
@@ -666,6 +716,456 @@ void handleReset(const httplib::Request& req, httplib::Response& res) {
     
   } catch (const std::exception& e) {
     std::cerr << "ERROR in handleReset: " << e.what() << std::endl;
+    res.status = 500;
+    res.set_content(errorResponse(e.what()).dump(), "application/json");
+  }
+}
+
+/**
+ * ============================================================================
+ * ANOMALY DETECTION ENDPOINTS
+ * ============================================================================
+ */
+
+/**
+ * POST /api/anomaly/configure
+ * Configure anomaly detection thresholds and weights
+ * 
+ * Body: {
+ *   "density_threshold": 0.05,
+ *   "velocity_threshold": 0.10,
+ *   "pressure_threshold": 0.05,
+ *   "score_threshold": 0.1,
+ *   "weight_density": 1.0,
+ *   "weight_velocity": 0.5,
+ *   "weight_pressure": 1.5
+ * }
+ */
+void handleAnomalyConfig(const httplib::Request& req, httplib::Response& res) {
+  try {
+    std::cout << "\n>>> POST /api/anomaly/configure" << std::endl;
+    
+    if (!g_solver) {
+      res.status = 400;
+      res.set_content(errorResponse("Simulation not created").dump(), "application/json");
+      return;
+    }
+
+    auto body = json::parse(req.body);
+    
+    ShockSolver::AnomalyConfig config;
+    config.density_threshold = body.value("density_threshold", 0.05);
+    config.velocity_threshold = body.value("velocity_threshold", 0.10);
+    config.pressure_threshold = body.value("pressure_threshold", 0.05);
+    config.entropy_threshold = body.value("entropy_threshold", 0.05);
+    config.score_threshold = body.value("score_threshold", 0.1);
+    config.weight_density = body.value("weight_density", 1.0);
+    config.weight_velocity = body.value("weight_velocity", 0.5);
+    config.weight_pressure = body.value("weight_pressure", 1.5);
+    config.weight_entropy = body.value("weight_entropy", 1.0);
+
+    g_solver->setAnomalyConfig(config);
+
+    json response = successResponse("Anomaly detection configured");
+    response["config"] = {
+      {"density_threshold", config.density_threshold},
+      {"velocity_threshold", config.velocity_threshold},
+      {"pressure_threshold", config.pressure_threshold},
+      {"entropy_threshold", config.entropy_threshold},
+      {"score_threshold", config.score_threshold},
+      {"weight_density", config.weight_density},
+      {"weight_velocity", config.weight_velocity},
+      {"weight_pressure", config.weight_pressure},
+      {"weight_entropy", config.weight_entropy}
+    };
+
+    res.set_content(response.dump(), "application/json");
+    std::cout << "Anomaly config updated" << std::endl;
+    
+  } catch (const std::exception& e) {
+    std::cerr << "ERROR in handleAnomalyConfig: " << e.what() << std::endl;
+    res.status = 400;
+    res.set_content(errorResponse(e.what()).dump(), "application/json");
+  }
+}
+
+/**
+ * GET /api/anomaly/config
+ * Get current anomaly detection configuration
+ */
+void handleGetAnomalyConfig(const httplib::Request& req, httplib::Response& res) {
+  try {
+    std::cout << "\n>>> GET /api/anomaly/config" << std::endl;
+    
+    if (!g_solver) {
+      res.status = 400;
+      res.set_content(errorResponse("Simulation not created").dump(), "application/json");
+      return;
+    }
+
+    auto config = g_solver->getAnomalyConfig();
+
+    json response;
+    response["success"] = true;
+    response["config"] = {
+      {"density_threshold", config.density_threshold},
+      {"velocity_threshold", config.velocity_threshold},
+      {"pressure_threshold", config.pressure_threshold},
+      {"entropy_threshold", config.entropy_threshold},
+      {"score_threshold", config.score_threshold},
+      {"weight_density", config.weight_density},
+      {"weight_velocity", config.weight_velocity},
+      {"weight_pressure", config.weight_pressure},
+      {"weight_entropy", config.weight_entropy}
+    };
+
+    res.set_content(response.dump(), "application/json");
+    
+  } catch (const std::exception& e) {
+    std::cerr << "ERROR in handleGetAnomalyConfig: " << e.what() << std::endl;
+    res.status = 500;
+    res.set_content(errorResponse(e.what()).dump(), "application/json");
+  }
+}
+
+/**
+ * POST /api/anomaly/check
+ * Compare simulation predictions against provided sensor readings
+ * 
+ * Body: {
+ *   "readings": [
+ *     {"position": 0.2, "density": 1.0, "velocity": 0.0, "pressure": 1.0},
+ *     ...
+ *   ]
+ * }
+ * 
+ * Returns detailed per-sensor anomaly analysis
+ */
+void handleAnomalyCheck(const httplib::Request& req, httplib::Response& res) {
+  try {
+    std::cout << "\n>>> POST /api/anomaly/check" << std::endl;
+    
+    if (!g_solver) {
+      res.status = 400;
+      res.set_content(errorResponse("Simulation not created").dump(), "application/json");
+      return;
+    }
+
+    auto body = json::parse(req.body);
+    
+    // Parse actual sensor readings from request
+    std::vector<ShockSolver::SensorReading> actual_readings;
+    for (const auto& r : body["readings"]) {
+      ShockSolver::SensorReading reading;
+      reading.position = r["position"];
+      reading.density = r["density"];
+      reading.velocity = r["velocity"];
+      reading.pressure = r["pressure"];
+      reading.entropy = r.value("entropy", 0.0);  // Optional, default to 0
+      reading.time = g_solver->getCurrentTime();
+      actual_readings.push_back(reading);
+    }
+
+    std::cout << "Checking " << actual_readings.size() << " sensor readings for anomalies" << std::endl;
+
+    // Run anomaly detection
+    auto results = g_solver->checkForAnomalies(actual_readings);
+    
+    // Build response
+    json response;
+    response["success"] = true;
+    response["time"] = g_solver->getCurrentTime();
+    response["anomaly_detected"] = false;
+    response["results"] = json::array();
+    
+    int anomaly_count = 0;
+    double max_score = 0.0;
+    int max_score_idx = -1;
+    
+    for (const auto& r : results) {
+      json result;
+      result["sensor_index"] = r.sensor_index;
+      result["position"] = r.position;
+      
+      // Predicted vs actual
+      result["predicted"] = {
+        {"density", r.predicted_density},
+        {"velocity", r.predicted_velocity},
+        {"pressure", r.predicted_pressure},
+        {"entropy", r.predicted_entropy}
+      };
+      result["actual"] = {
+        {"density", r.actual_density},
+        {"velocity", r.actual_velocity},
+        {"pressure", r.actual_pressure},
+        {"entropy", r.actual_entropy}
+      };
+      
+      // Residuals
+      result["residual_density"] = r.residual_density;
+      result["residual_velocity"] = r.residual_velocity;
+      result["residual_pressure"] = r.residual_pressure;
+      result["residual_entropy"] = r.residual_entropy;
+      
+      // Normalized errors (percentage)
+      result["normalized_density"] = r.normalized_density;
+      result["normalized_velocity"] = r.normalized_velocity;
+      result["normalized_pressure"] = r.normalized_pressure;
+      result["normalized_entropy"] = r.normalized_entropy;
+      
+      // Anomaly status
+      result["anomaly_score"] = r.anomaly_score;
+      result["is_anomalous"] = r.is_anomalous;
+      result["primary_deviation"] = r.primary_deviation;
+      
+      if (r.is_anomalous) {
+        response["anomaly_detected"] = true;
+        anomaly_count++;
+      }
+      if (r.anomaly_score > max_score) {
+        max_score = r.anomaly_score;
+        max_score_idx = r.sensor_index;
+      }
+      
+      response["results"].push_back(result);
+    }
+    
+    // Summary statistics
+    response["summary"] = {
+      {"total_sensors", results.size()},
+      {"anomalous_sensors", anomaly_count},
+      {"max_anomaly_score", max_score},
+      {"max_score_sensor_index", max_score_idx}
+    };
+
+    res.set_content(response.dump(), "application/json");
+    
+    std::cout << "Anomaly check complete: " << anomaly_count << "/" << results.size() 
+              << " sensors flagged, max score = " << max_score << std::endl;
+    
+  } catch (const std::exception& e) {
+    std::cerr << "ERROR in handleAnomalyCheck: " << e.what() << std::endl;
+    res.status = 500;
+    res.set_content(errorResponse(e.what()).dump(), "application/json");
+  }
+}
+
+/**
+ * POST /api/anomaly/analyze
+ * Full anomaly analysis with severity classification and system-level assessment
+ * 
+ * Body: {
+ *   "readings": [...],       // Values to check (numerical solution)
+ *   "reference": [...]       // Optional: ground truth to compare against (analytical solution)
+ *                            // If not provided, compares against current simulation state
+ * }
+ * 
+ * Returns summary with severity level
+ */
+void handleAnomalyAnalyze(const httplib::Request& req, httplib::Response& res) {
+  try {
+    std::cout << "\n>>> POST /api/anomaly/analyze" << std::endl;
+    
+    if (!g_solver) {
+      res.status = 400;
+      res.set_content(errorResponse("Simulation not created").dump(), "application/json");
+      return;
+    }
+
+    auto body = json::parse(req.body);
+    
+    // Parse actual sensor readings (numerical solution)
+    std::vector<ShockSolver::SensorReading> actual_readings;
+    for (const auto& r : body["readings"]) {
+      ShockSolver::SensorReading reading;
+      reading.position = r["position"];
+      reading.density = r["density"];
+      reading.velocity = r["velocity"];
+      reading.pressure = r["pressure"];
+      reading.entropy = r.value("entropy", 0.0);
+      reading.time = g_solver->getCurrentTime();
+      actual_readings.push_back(reading);
+    }
+
+    // Check if reference readings are provided (analytical solution)
+    std::vector<ShockSolver::SensorReading> reference_readings;
+    bool has_reference = body.contains("reference") && body["reference"].is_array();
+    
+    if (has_reference) {
+      for (const auto& r : body["reference"]) {
+        ShockSolver::SensorReading reading;
+        reading.position = r["position"];
+        reading.density = r["density"];
+        reading.velocity = r["velocity"];
+        reading.pressure = r["pressure"];
+        reading.entropy = r.value("entropy", 0.0);
+        reading.time = g_solver->getCurrentTime();
+        reference_readings.push_back(reading);
+      }
+      std::cout << "Using provided reference (analytical) for comparison" << std::endl;
+    } else {
+      std::cout << "Using simulation state for comparison" << std::endl;
+    }
+
+    // Run analysis - either with reference or against simulation state
+    ShockSolver::AnomalySummary summary;
+    if (has_reference && reference_readings.size() == actual_readings.size()) {
+      // Direct comparison: actual (numerical) vs reference (analytical)
+      summary = g_solver->analyzeAnomaliesWithReference(actual_readings, reference_readings);
+    } else {
+      // Original behavior: compare against simulation state
+      summary = g_solver->analyzeAnomalies(actual_readings);
+    }
+    
+    // Build response
+    json response;
+    response["success"] = true;
+    response["time"] = summary.time;
+    response["comparison_mode"] = has_reference ? "numerical_vs_analytical" : "readings_vs_simulation";
+    
+    // Summary
+    response["summary"] = {
+      {"total_sensors", summary.total_sensors},
+      {"anomalous_sensors", summary.anomalous_sensors},
+      {"max_anomaly_score", summary.max_anomaly_score},
+      {"max_score_sensor_index", summary.max_score_sensor_index},
+      {"system_anomaly", summary.system_anomaly},
+      {"severity", summary.severity}
+    };
+    
+    // Detailed results
+    response["sensor_results"] = json::array();
+    for (const auto& r : summary.sensor_results) {
+      json result;
+      result["sensor_index"] = r.sensor_index;
+      result["position"] = r.position;
+      result["anomaly_score"] = r.anomaly_score;
+      result["is_anomalous"] = r.is_anomalous;
+      result["primary_deviation"] = r.primary_deviation;
+      result["residuals"] = {
+        {"density", r.residual_density},
+        {"velocity", r.residual_velocity},
+        {"pressure", r.residual_pressure},
+        {"entropy", r.residual_entropy}
+      };
+      result["normalized_errors"] = {
+        {"density", r.normalized_density},
+        {"velocity", r.normalized_velocity},
+        {"pressure", r.normalized_pressure},
+        {"entropy", r.normalized_entropy}
+      };
+      response["sensor_results"].push_back(result);
+    }
+
+    res.set_content(response.dump(), "application/json");
+    
+    std::cout << "Anomaly analysis complete: severity = " << summary.severity 
+              << ", " << summary.anomalous_sensors << "/" << summary.total_sensors 
+              << " sensors flagged" << std::endl;
+    
+  } catch (const std::exception& e) {
+    std::cerr << "ERROR in handleAnomalyAnalyze: " << e.what() << std::endl;
+    res.status = 500;
+    res.set_content(errorResponse(e.what()).dump(), "application/json");
+  }
+}
+
+/**
+ * POST /api/anomaly/inject
+ * Inject a simulated fault into sensor readings for testing
+ * Useful for demonstrating anomaly detection capabilities
+ * 
+ * Body: {
+ *   "sensor_index": 2,
+ *   "fault_type": "pressure_drift",  // "pressure_drift", "density_spike", "velocity_bias", "random_noise"
+ *   "magnitude": 0.2                 // Fractional magnitude of fault
+ * }
+ */
+void handleAnomalyInject(const httplib::Request& req, httplib::Response& res) {
+  try {
+    std::cout << "\n>>> POST /api/anomaly/inject" << std::endl;
+    
+    if (!g_solver) {
+      res.status = 400;
+      res.set_content(errorResponse("Simulation not created").dump(), "application/json");
+      return;
+    }
+
+    auto body = json::parse(req.body);
+    
+    int sensor_index = body.value("sensor_index", 0);
+    std::string fault_type = body.value("fault_type", "pressure_drift");
+    double magnitude = body.value("magnitude", 0.2);
+
+    // Get current sensor readings (truth)
+    auto readings = g_solver->getSensorReadings();
+    
+    if (sensor_index < 0 || sensor_index >= static_cast<int>(readings.size())) {
+      res.status = 400;
+      res.set_content(errorResponse("Invalid sensor index").dump(), "application/json");
+      return;
+    }
+
+    // Create faulted readings
+    json response;
+    response["success"] = true;
+    response["fault_injected"] = {
+      {"sensor_index", sensor_index},
+      {"fault_type", fault_type},
+      {"magnitude", magnitude}
+    };
+    
+    response["original_reading"] = {
+      {"density", readings[sensor_index].density},
+      {"velocity", readings[sensor_index].velocity},
+      {"pressure", readings[sensor_index].pressure},
+      {"entropy", readings[sensor_index].entropy}
+    };
+
+    // Apply fault
+    if (fault_type == "pressure_drift") {
+      readings[sensor_index].pressure *= (1.0 + magnitude);
+    } else if (fault_type == "density_spike") {
+      readings[sensor_index].density *= (1.0 + magnitude);
+    } else if (fault_type == "velocity_bias") {
+      readings[sensor_index].velocity += magnitude * std::max(std::abs(readings[sensor_index].velocity), 1.0);
+    } else if (fault_type == "entropy_spike") {
+      // Entropy can be negative, so we add magnitude directly scaled by abs value
+      readings[sensor_index].entropy += magnitude * std::max(std::abs(readings[sensor_index].entropy), 1.0);
+    } else if (fault_type == "random_noise") {
+      // Add noise to all variables
+      readings[sensor_index].density *= (1.0 + magnitude * (2.0 * (rand() / (double)RAND_MAX) - 1.0));
+      readings[sensor_index].velocity += magnitude * (2.0 * (rand() / (double)RAND_MAX) - 1.0);
+      readings[sensor_index].pressure *= (1.0 + magnitude * (2.0 * (rand() / (double)RAND_MAX) - 1.0));
+      readings[sensor_index].entropy += magnitude * (2.0 * (rand() / (double)RAND_MAX) - 1.0);
+    }
+
+    response["faulted_reading"] = {
+      {"density", readings[sensor_index].density},
+      {"velocity", readings[sensor_index].velocity},
+      {"pressure", readings[sensor_index].pressure},
+      {"entropy", readings[sensor_index].entropy}
+    };
+
+    // Return all readings with fault applied
+    response["readings"] = json::array();
+    for (const auto& r : readings) {
+      json reading;
+      reading["position"] = r.position;
+      reading["density"] = r.density;
+      reading["velocity"] = r.velocity;
+      reading["pressure"] = r.pressure;
+      reading["entropy"] = r.entropy;
+      response["readings"].push_back(reading);
+    }
+
+    res.set_content(response.dump(), "application/json");
+    
+    std::cout << "Fault injected: " << fault_type << " with magnitude " << magnitude 
+              << " at sensor " << sensor_index << std::endl;
+    
+  } catch (const std::exception& e) {
+    std::cerr << "ERROR in handleAnomalyInject: " << e.what() << std::endl;
     res.status = 500;
     res.set_content(errorResponse(e.what()).dump(), "application/json");
   }
@@ -698,31 +1198,44 @@ int main() {
   });
 
   std::cout << R"(
-    ╔═══════════════════════════════════════════╗
-    ║   Shock Tube Simulation API Server        ║
-    ║   Physics Engine: 1D Euler Equations      ║
-    ║   Port: 8080                              ║
-    ╚═══════════════════════════════════════════╝
+    ╔═══════════════════════════════════════════════════════════╗
+    ║   Shock Tube Simulation API Server                        ║
+    ║   Physics Engine: 1D Euler Equations                      ║
+    ║   Features: HLLC/Entropy-Stable, MUSCL, Anomaly Detection ║
+    ║   Port: 8080                                              ║
+    ╚═══════════════════════════════════════════════════════════╝
   )" << std::endl;
 
+  // Simulation endpoints
   svr.Post("/api/simulation/create", handleCreateSimulation);
   svr.Post("/api/simulation/init/shocktube", handleInitShockTube);
   svr.Post("/api/simulation/init/toro", handleInitToro);
+  svr.Post("/api/simulation/init/sparse", handleInitSparse);
   svr.Post("/api/simulation/configure", handleConfigure);
+  svr.Post("/api/simulation/sensors/place", handlePlaceSensors);
   svr.Post("/api/simulation/run", handleRun);
   svr.Post("/api/simulation/step", handleStep);
-  svr.Post("/api/simulation/sensors/place", handlePlaceSensors);
-  svr.Get("/api/simulation/sensors/readings", handleGetSensorReadings);
   svr.Post("/api/simulation/reset", handleReset);
   svr.Get("/api/simulation/status", handleGetStatus);
   svr.Get("/api/simulation/data", handleGetData);
+  svr.Get("/api/simulation/sensors/readings", handleGetSensorReadings);
+  svr.Get("/api/simulation/sensors/analytical", handleGetAnalyticalAtSensors);
   svr.Get("/api/simulation/validate", handleValidate);
   svr.Get("/api/simulation/analytical", handleGetAnalytical);
   svr.Post("/api/toro/sensor-data", handleGetToroSensorData);
-  svr.Post("/api/simulation/init/sparse", handleInitSparse);
+  
+  // Anomaly detection endpoints
+  svr.Post("/api/anomaly/configure", handleAnomalyConfig);
+  svr.Get("/api/anomaly/config", handleGetAnomalyConfig);
+  svr.Post("/api/anomaly/check", handleAnomalyCheck);
+  svr.Post("/api/anomaly/analyze", handleAnomalyAnalyze);
+  svr.Post("/api/anomaly/inject", handleAnomalyInject);
+  
+  // Health check
   svr.Get("/api/health", handleHealth);
 
   std::cout << "\nAPI Endpoints:" << std::endl;
+  std::cout << "\n  === Simulation ===" << std::endl;
   std::cout << "  POST   /api/simulation/create         - Create new simulation" << std::endl;
   std::cout << "  POST   /api/simulation/init/shocktube - Initialize shock tube" << std::endl;
   std::cout << "  POST   /api/simulation/init/toro      - Initialize Toro tests" << std::endl;
@@ -731,14 +1244,25 @@ int main() {
   std::cout << "  POST   /api/simulation/sensors/place  - Place sensors" << std::endl;
   std::cout << "  POST   /api/simulation/run            - Run full simulation" << std::endl;
   std::cout << "  POST   /api/simulation/step           - Step N timesteps" << std::endl;
-  std::cout << "  GET    /api/simulation/sensors/readings - Get sensor readings" << std::endl;
   std::cout << "  POST   /api/simulation/reset          - Reset simulation" << std::endl;
   std::cout << "  GET    /api/simulation/status         - Get status" << std::endl;
   std::cout << "  GET    /api/simulation/data           - Get full solution" << std::endl;
+  std::cout << "  GET    /api/simulation/sensors/readings - Get sensor readings" << std::endl;
+  std::cout << "  GET    /api/simulation/sensors/analytical - Get analytical solution at sensors" << std::endl;
   std::cout << "  GET    /api/simulation/validate       - Validate vs analytical" << std::endl;
   std::cout << "  GET    /api/simulation/analytical     - Get analytical solution" << std::endl;
-  std::cout << "  POST   /api/toro/sensor-data          - Get sensor data according to Toro test" << std::endl;
+  std::cout << "  POST   /api/toro/sensor-data          - Get sensor data for Toro test" << std::endl;
+  
+  std::cout << "\n  === Anomaly Detection ===" << std::endl;
+  std::cout << "  POST   /api/anomaly/configure         - Configure thresholds" << std::endl;
+  std::cout << "  GET    /api/anomaly/config            - Get current config" << std::endl;
+  std::cout << "  POST   /api/anomaly/check             - Check readings for anomalies" << std::endl;
+  std::cout << "  POST   /api/anomaly/analyze           - Full analysis with severity" << std::endl;
+  std::cout << "  POST   /api/anomaly/inject            - Inject fault for testing" << std::endl;
+  
+  std::cout << "\n  === System ===" << std::endl;
   std::cout << "  GET    /api/health                    - Health check" << std::endl;
+  
   std::cout << "\nServer starting on http://localhost:8080" << std::endl;
   std::cout << "Waiting for requests...\n" << std::endl;
 

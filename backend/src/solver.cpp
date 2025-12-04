@@ -38,6 +38,9 @@ ShockSolver::ShockSolver(const Config& cfg)
   }
 
   initial_conditions_.is_valid = false;
+  
+  // Initialize default anomaly config
+  anomaly_config_ = AnomalyConfig();
 }
 
 /**
@@ -673,6 +676,40 @@ std::vector<ShockSolver::SensorReading> ShockSolver::getSensorReadings() const {
 }
 
 /**
+ * Get analytical (exact Riemann) solution at sensor positions
+ * This represents the "ground truth" for comparison against numerical solution
+ */
+std::vector<ShockSolver::SensorReading> ShockSolver::getAnalyticalAtSensors() const {
+  // Get full analytical solution
+  std::vector<double> rho_exact, u_exact, p_exact;
+  computeAnalyticalSolution(rho_exact, u_exact, p_exact);
+  
+  std::vector<SensorReading> readings;
+  
+  for (size_t i = 0; i < sensor_indices_.size(); ++i) {
+    int idx = sensor_indices_[i];
+    
+    SensorReading reading;
+    reading.position = x_[idx];
+    reading.density = rho_exact[idx];
+    reading.velocity = u_exact[idx];
+    reading.pressure = p_exact[idx];
+    
+    // Compute entropy from analytical primitive variables: s = ln(p / rho^gamma)
+    if (rho_exact[idx] > 0 && p_exact[idx] > 0) {
+      reading.entropy = std::log(p_exact[idx] / std::pow(rho_exact[idx], cfg_.gamma));
+    } else {
+      reading.entropy = 0.0;
+    }
+    
+    reading.time = t_;
+    readings.push_back(reading);
+  }
+  
+  return readings;
+}
+
+/**
  * Sparse Initialization - Reconstruct field from limited sensor data
  */
 
@@ -746,10 +783,21 @@ std::vector<ShockSolver::SparseDataPoint> ShockSolver::getSensorDataForToroTest(
 
 /**
  * Initialize from sparse sensor data using Interp methods
+ * 
+ * Methods:
+ *   - "piecewise_constant": Detect discontinuity, average states per-side, apply step function
+ *   - "linear": Linear interpolation (smears discontinuities - not recommended for shocks)
+ *   - "characteristic": Transform to characteristic variables before interpolating
+ * 
+ * Parameters:
+ *   - sparse_data: Vector of sensor readings with position and primitive variables
+ *   - interpolation_method: Method to use for reconstruction
+ *   - diaphragm_x: Location of discontinuity. If < 0, auto-detect from sensor data
  */
 void ShockSolver::initializeFromSparseData(
   const std::vector<SparseDataPoint>& sparse_data,
-  const std::string& interpolation_method) {
+  const std::string& interpolation_method,
+  double diaphragm_x) {
   
   if (sparse_data.empty()) {
     throw std::runtime_error("No sparse data provided");
@@ -762,101 +810,429 @@ void ShockSolver::initializeFromSparseData(
               return a.x < b.x;
             });
   
-  // Store for validation - estimate diaphragm position from data
-  // Find where biggest density jump is
-  double max_jump = 0.0;
-  double estimated_diaphragm = 0.5;
-  for (size_t i = 0; i < sorted_data.size() - 1; ++i) {
-    // Normalize jumps by magnitude
-    double rho_avg = 0.5 * (sorted_data[i].rho + sorted_data[i + 1].rho);
-    double u_avg = 0.5 * (sorted_data[i].u + sorted_data[i + 1].u);
-    double p_avg = 0.5 * (sorted_data[i].p + sorted_data[i + 1].p);
+  std::cout << "Initializing from " << sparse_data.size() << " sparse data points" << std::endl;
+  std::cout << "Interpolation Method: " << interpolation_method << std::endl;
 
-    double rho_jump = std::abs(sorted_data[i + 1].rho - sorted_data[i].rho) / (rho_avg + 1e-10);
-    double u_jump = std::abs(sorted_data[i + 1].u - sorted_data[i].u) / (u_avg + 1e-10);
-    double p_jump = std::abs(sorted_data[i + 1].p - sorted_data[i].p) / (p_avg + 1e-10);
-
-    // Use maximum normalized jump across all variables
-    double total_jump = std::max({rho_jump, u_jump, p_jump});
-
-    if (total_jump > max_jump) {
-      max_jump = total_jump;
-      estimated_diaphragm = 0.5 * (sorted_data[i].x + sorted_data[i + 1].x);
+  // =========================================================================
+  // DISCONTINUITY LOCATION
+  // Either use user-specified location or auto-detect from sensor data
+  // =========================================================================
+  double x_discontinuity;
+  
+  if (diaphragm_x >= 0.0) {
+    // User specified the diaphragm location
+    x_discontinuity = diaphragm_x;
+    std::cout << "Using user-specified diaphragm location: x = " << x_discontinuity << std::endl;
+  } else {
+    // Auto-detect: Find the largest normalized jump between adjacent sensors
+    double max_jump_score = 0.0;
+    size_t discontinuity_idx = 0;
+    
+    for (size_t i = 0; i < sorted_data.size() - 1; ++i) {
+      const auto& left = sorted_data[i];
+      const auto& right = sorted_data[i + 1];
+      
+      double rho_avg = 0.5 * (left.rho + right.rho);
+      double p_avg = 0.5 * (left.p + right.p);
+      
+      double rho_jump = std::abs(right.rho - left.rho) / std::max(rho_avg, 1e-10);
+      double p_jump = std::abs(right.p - left.p) / std::max(p_avg, 1e-10);
+      
+      double jump_score = 0.4 * rho_jump + 0.6 * p_jump;
+      
+      if (jump_score > max_jump_score) {
+        max_jump_score = jump_score;
+        discontinuity_idx = i;
+      }
+    }
+    
+    // If no significant jump found, default to domain midpoint
+    if (max_jump_score < 0.1) {
+      x_discontinuity = 0.5 * cfg_.length;
+      std::cout << "Warning: No significant jump detected (score=" << max_jump_score 
+                << "), using domain midpoint: x = " << x_discontinuity << std::endl;
+    } else {
+      x_discontinuity = 0.5 * (sorted_data[discontinuity_idx].x + 
+                               sorted_data[discontinuity_idx + 1].x);
+      std::cout << "Auto-detected discontinuity between sensors " << discontinuity_idx 
+                << " and " << discontinuity_idx + 1 
+                << " at x = " << x_discontinuity 
+                << " (jump score = " << max_jump_score << ")" << std::endl;
     }
   }
 
-  estimated_diaphragm = 0.5;
+  // =========================================================================
+  // COMPUTE AVERAGE STATES ON EACH SIDE
+  // For Riemann problems, states should be uniform on each side of discontinuity
+  // =========================================================================
+  double rho_L = 0, u_L = 0, p_L = 0;
+  double rho_R = 0, u_R = 0, p_R = 0;
+  int count_L = 0, count_R = 0;
+  
+  for (const auto& pt : sorted_data) {
+    if (pt.x < x_discontinuity) {
+      rho_L += pt.rho;
+      u_L += pt.u;
+      p_L += pt.p;
+      count_L++;
+    } else {
+      rho_R += pt.rho;
+      u_R += pt.u;
+      p_R += pt.p;
+      count_R++;
+    }
+  }
+  
+  if (count_L > 0) {
+    rho_L /= count_L;
+    u_L /= count_L;
+    p_L /= count_L;
+  }
+  if (count_R > 0) {
+    rho_R /= count_R;
+    u_R /= count_R;
+    p_R /= count_R;
+  }
+  
+  std::cout << "Left state  (n=" << count_L << "): rho=" << rho_L << ", u=" << u_L << ", p=" << p_L << std::endl;
+  std::cout << "Right state (n=" << count_R << "): rho=" << rho_R << ", u=" << u_R << ", p=" << p_R << std::endl;
 
   // Store initial conditions for analytical solution comparison
-  // Use first and last sensor as left/right states
-  initial_conditions_.rho_L = sorted_data.front().rho;
-  initial_conditions_.rho_R = sorted_data.back().rho;
-  initial_conditions_.u_L = sorted_data.front().u;
-  initial_conditions_.u_R = sorted_data.back().u;
-  initial_conditions_.p_L = sorted_data.front().p;
-  initial_conditions_.p_R = sorted_data.back().p;
-  initial_conditions_.x_diaphragm = estimated_diaphragm;
+  initial_conditions_.rho_L = rho_L;
+  initial_conditions_.u_L = u_L;
+  initial_conditions_.p_L = p_L;
+  initial_conditions_.rho_R = rho_R;
+  initial_conditions_.u_R = u_R;
+  initial_conditions_.p_R = p_R;
+  initial_conditions_.x_diaphragm = x_discontinuity;
+  initial_conditions_.endTime = cfg_.endTime;
   initial_conditions_.is_valid = true;
 
-  std::cout << "Initializing from " << sparse_data.size() << " sparse data points" << std::endl;
-  std::cout << "Interpolation Method: " << interpolation_method << std::endl;
-  std::cout << "Estimated diaphragm position: " << estimated_diaphragm << std::endl;
-
-  // Interpolate to fill cells
-  for (int i = 0; i < cfg_.numCells; ++i) {
-    double x = x_[i];
-
-    // Find bracketing points
-    if (x <= sorted_data.front().x) {
-      // Extrapolate from first point
-      rho_[i] = sorted_data.front().rho;
-      u_[i] = sorted_data.front().u;
-      p_[i] = sorted_data.front().p;
-    } else if (x >= sorted_data.back().x) {
-      // Extrapolate from last point
-      rho_[i] = sorted_data.back().rho;
-      u_[i] = sorted_data.back().u;
-      p_[i] = sorted_data.back().p;
-    } else {
-      // Find bracketing sensors
-      size_t left_idx = 0;
-      for (size_t j = 0; j < sorted_data.size() - 1; ++j) {
-        if (x >= sorted_data[j].x && x < sorted_data[j + 1].x) {
-          left_idx = j;
-          break;
-        }
-      }
-
-      const SparseDataPoint& left = sorted_data[left_idx];
-      const SparseDataPoint& right = sorted_data[left_idx + 1];
-
-      if (interpolation_method == "piecewise_constant") {
-        // Use nearest neighbor (left point for tie)
-        double mid = 0.5 * (left.x + right.x);
-        if (x < mid) {
-          rho_[i] = left.rho;
-          u_[i] = left.u;
-          p_[i] = left.p; 
-        } else {
-          rho_[i] = right.rho;
-          u_[i] = right.u;
-          p_[i] = right.p;
-        }
+  // =========================================================================
+  // APPLY INITIALIZATION BASED ON METHOD
+  // =========================================================================
+  
+  if (interpolation_method == "piecewise_constant") {
+    // Clean step function at detected discontinuity
+    // This is ideal for Riemann problems with uniform initial states
+    for (int i = 0; i < cfg_.numCells; ++i) {
+      if (x_[i] < x_discontinuity) {
+        rho_[i] = rho_L;
+        u_[i] = u_L;
+        p_[i] = p_L;
       } else {
-        // Linear interpolation (default)
+        rho_[i] = rho_R;
+        u_[i] = u_R;
+        p_[i] = p_R;
+      }
+    }
+    std::cout << "Applied piecewise constant (step function at x=" << x_discontinuity << ")" << std::endl;
+    
+  } else if (interpolation_method == "linear") {
+    // Linear interpolation between sensors
+    // Warning: This smears discontinuities and creates unphysical intermediate states
+    for (int i = 0; i < cfg_.numCells; ++i) {
+      double x = x_[i];
+
+      if (x <= sorted_data.front().x) {
+        rho_[i] = sorted_data.front().rho;
+        u_[i] = sorted_data.front().u;
+        p_[i] = sorted_data.front().p;
+      } else if (x >= sorted_data.back().x) {
+        rho_[i] = sorted_data.back().rho;
+        u_[i] = sorted_data.back().u;
+        p_[i] = sorted_data.back().p;
+      } else {
+        // Find bracketing sensors
+        size_t left_idx = 0;
+        for (size_t j = 0; j < sorted_data.size() - 1; ++j) {
+          if (x >= sorted_data[j].x && x < sorted_data[j + 1].x) {
+            left_idx = j;
+            break;
+          }
+        }
+
+        const SparseDataPoint& left = sorted_data[left_idx];
+        const SparseDataPoint& right = sorted_data[left_idx + 1];
         double t = (x - left.x) / (right.x - left.x);
+        
         rho_[i] = left.rho + t * (right.rho - left.rho);
         u_[i] = left.u + t * (right.u - left.u);
         p_[i] = left.p + t * (right.p - left.p);
       }
     }
+    std::cout << "Applied linear interpolation (warning: smears discontinuities)" << std::endl;
+    
+  } else if (interpolation_method == "characteristic") {
+    // Transform to characteristic variables, interpolate, transform back
+    // This prevents spurious oscillations from interpolating across different wave families
+    
+    // For simplicity, we'll use the piecewise constant approach but could extend
+    // to interpolate in characteristic space for smooth regions
+    for (int i = 0; i < cfg_.numCells; ++i) {
+      if (x_[i] < x_discontinuity) {
+        rho_[i] = rho_L;
+        u_[i] = u_L;
+        p_[i] = p_L;
+      } else {
+        rho_[i] = rho_R;
+        u_[i] = u_R;
+        p_[i] = p_R;
+      }
+    }
+    std::cout << "Applied characteristic-based initialization" << std::endl;
+    
+  } else {
+    throw std::runtime_error("Unknown interpolation method: " + interpolation_method);
   }
 
   primitivesToConservative();
-
   std::cout << "Sparse initialization complete" << std::endl;
 }
 
+
+/**
+ * ANOMALY DETECTION SYSTEM
+ * 
+ * Compares predicted sensor readings from physics simulation against
+ * actual measurements to detect deviations indicating:
+ *   - Sensor faults (drift, failure, noise)
+ *   - Model errors (physics assumptions violated)
+ *   - Physical anomalies (unexpected flow behavior)
+ * 
+ * In a real rocket engine context, this would flag:
+ *   - Combustion instabilities
+ *   - Feed system blockages or cavitation
+ *   - Unexpected pressure transients
+ *   - Sensor degradation
+ */
+
+void ShockSolver::setAnomalyConfig(const AnomalyConfig& config) {
+  anomaly_config_ = config;
+}
+
+ShockSolver::AnomalyResult ShockSolver::compareSensorReading(
+    int sensor_idx,
+    const SensorReading& predicted,
+    const SensorReading& actual) const {
+  
+  AnomalyResult result;
+  result.time = actual.time;
+  result.sensor_index = sensor_idx;
+  result.position = actual.position;
+  
+  // Store both predicted and actual values for diagnostics
+  result.predicted_density = predicted.density;
+  result.predicted_velocity = predicted.velocity;
+  result.predicted_pressure = predicted.pressure;
+  result.predicted_entropy = predicted.entropy;
+  result.actual_density = actual.density;
+  result.actual_velocity = actual.velocity;
+  result.actual_pressure = actual.pressure;
+  result.actual_entropy = actual.entropy;
+  
+  // Raw residuals (predicted - actual)
+  result.residual_density = predicted.density - actual.density;
+  result.residual_velocity = predicted.velocity - actual.velocity;
+  result.residual_pressure = predicted.pressure - actual.pressure;
+  result.residual_entropy = predicted.entropy - actual.entropy;
+  
+  // Normalized residuals (absolute % error)
+  // Handle near-zero reference values carefully
+  auto safeNormalize = [](double residual, double reference, double min_ref = 1e-10) {
+    double denom = std::max(std::abs(reference), min_ref);
+    return std::abs(residual) / denom;
+  };
+  
+  result.normalized_density = safeNormalize(result.residual_density, actual.density);
+  
+  // Velocity can legitimately be zero, use a minimum scale
+  result.normalized_velocity = safeNormalize(
+      result.residual_velocity, 
+      std::max(std::abs(actual.velocity), 1.0));
+  
+  result.normalized_pressure = safeNormalize(result.residual_pressure, actual.pressure);
+  
+  // Entropy can be negative (it's log-based), use absolute value for normalization
+  result.normalized_entropy = safeNormalize(
+      result.residual_entropy,
+      std::max(std::abs(actual.entropy), 1.0));
+  
+  // Composite anomaly score (weighted RMS of normalized errors)
+  // Weights from config - pressure typically most reliable in real systems
+  double w_rho = anomaly_config_.weight_density;
+  double w_u = anomaly_config_.weight_velocity;
+  double w_p = anomaly_config_.weight_pressure;
+  double w_s = anomaly_config_.weight_entropy;
+  double sum_weights = w_rho + w_u + w_p + w_s;
+  
+  result.anomaly_score = std::sqrt(
+      (w_rho * result.normalized_density * result.normalized_density +
+       w_u * result.normalized_velocity * result.normalized_velocity +
+       w_p * result.normalized_pressure * result.normalized_pressure +
+       w_s * result.normalized_entropy * result.normalized_entropy) 
+      / sum_weights);
+  
+  // Determine if anomalous based on thresholds
+  bool rho_flag = result.normalized_density > anomaly_config_.density_threshold;
+  bool u_flag = result.normalized_velocity > anomaly_config_.velocity_threshold;
+  bool p_flag = result.normalized_pressure > anomaly_config_.pressure_threshold;
+  bool s_flag = result.normalized_entropy > anomaly_config_.entropy_threshold;
+  bool score_flag = result.anomaly_score > anomaly_config_.score_threshold;
+  
+  // Flag as anomalous if:
+  // 1. Composite score exceeds threshold, OR
+  // 2. Multiple individual thresholds exceeded (correlated fault)
+  int individual_flags = (rho_flag ? 1 : 0) + (u_flag ? 1 : 0) + (p_flag ? 1 : 0) + (s_flag ? 1 : 0);
+  result.is_anomalous = score_flag || (individual_flags >= 2);
+  
+  // Identify primary deviation source for diagnostics
+  if (result.is_anomalous) {
+    double max_norm = std::max({
+        result.normalized_density,
+        result.normalized_velocity,
+        result.normalized_pressure,
+        result.normalized_entropy
+    });
+    
+    if (max_norm == result.normalized_density) {
+      result.primary_deviation = "density";
+    } else if (max_norm == result.normalized_velocity) {
+      result.primary_deviation = "velocity";
+    } else if (max_norm == result.normalized_pressure) {
+      result.primary_deviation = "pressure";
+    } else {
+      result.primary_deviation = "entropy";
+    }
+  } else {
+    result.primary_deviation = "none";
+  }
+  
+  return result;
+}
+
+std::vector<ShockSolver::AnomalyResult> ShockSolver::checkForAnomalies(
+    const std::vector<SensorReading>& actual_readings) const {
+  
+  // Get what our simulation predicts at sensor locations
+  std::vector<SensorReading> predicted = getSensorReadings();
+  
+  if (predicted.size() != actual_readings.size()) {
+    throw std::runtime_error(
+        "Sensor count mismatch: predicted " + 
+        std::to_string(predicted.size()) + 
+        " vs actual " + 
+        std::to_string(actual_readings.size()));
+  }
+  
+  std::vector<AnomalyResult> results;
+  results.reserve(predicted.size());
+  
+  for (size_t i = 0; i < predicted.size(); ++i) {
+    results.push_back(compareSensorReading(i, predicted[i], actual_readings[i]));
+  }
+  
+  return results;
+}
+
+ShockSolver::AnomalySummary ShockSolver::analyzeAnomalies(
+    const std::vector<SensorReading>& actual_readings) const {
+  
+  AnomalySummary summary;
+  summary.time = t_;
+  summary.sensor_results = checkForAnomalies(actual_readings);
+  summary.total_sensors = static_cast<int>(summary.sensor_results.size());
+  summary.anomalous_sensors = 0;
+  summary.max_anomaly_score = 0.0;
+  summary.max_score_sensor_index = -1;
+  
+  // Analyze results
+  for (const auto& r : summary.sensor_results) {
+    if (r.is_anomalous) {
+      summary.anomalous_sensors++;
+    }
+    if (r.anomaly_score > summary.max_anomaly_score) {
+      summary.max_anomaly_score = r.anomaly_score;
+      summary.max_score_sensor_index = r.sensor_index;
+    }
+  }
+  
+  // Determine system-level anomaly status
+  // Multiple sensors flagged suggests systemic issue vs single sensor fault
+  summary.system_anomaly = (summary.anomalous_sensors >= 2) || 
+                           (summary.max_anomaly_score > 0.5);
+  
+  // Severity classification
+  if (summary.anomalous_sensors == 0) {
+    summary.severity = "nominal";
+  } else if (summary.max_anomaly_score < 0.2 && summary.anomalous_sensors == 1) {
+    summary.severity = "warning";
+  } else if (summary.max_anomaly_score < 0.5 && summary.anomalous_sensors < summary.total_sensors / 2) {
+    summary.severity = "warning";
+  } else {
+    summary.severity = "critical";
+  }
+  
+  return summary;
+}
+
+/**
+ * Analyze anomalies with explicit reference readings
+ * Used for comparing numerical solution against analytical solution
+ * 
+ * @param actual_readings - The values to check (numerical solution)
+ * @param reference_readings - The ground truth to compare against (analytical solution)
+ */
+ShockSolver::AnomalySummary ShockSolver::analyzeAnomaliesWithReference(
+    const std::vector<SensorReading>& actual_readings,
+    const std::vector<SensorReading>& reference_readings) const {
+  
+  if (reference_readings.size() != actual_readings.size()) {
+    throw std::runtime_error(
+        "Sensor count mismatch: reference " + 
+        std::to_string(reference_readings.size()) + 
+        " vs actual " + 
+        std::to_string(actual_readings.size()));
+  }
+  
+  AnomalySummary summary;
+  summary.time = t_;
+  summary.total_sensors = static_cast<int>(actual_readings.size());
+  summary.anomalous_sensors = 0;
+  summary.max_anomaly_score = 0.0;
+  summary.max_score_sensor_index = -1;
+  
+  // Compare each sensor: reference (analytical) = predicted, actual (numerical) = actual
+  for (size_t i = 0; i < actual_readings.size(); ++i) {
+    AnomalyResult result = compareSensorReading(i, reference_readings[i], actual_readings[i]);
+    summary.sensor_results.push_back(result);
+    
+    if (result.is_anomalous) {
+      summary.anomalous_sensors++;
+    }
+    if (result.anomaly_score > summary.max_anomaly_score) {
+      summary.max_anomaly_score = result.anomaly_score;
+      summary.max_score_sensor_index = result.sensor_index;
+    }
+  }
+  
+  // Determine system-level anomaly status
+  summary.system_anomaly = (summary.anomalous_sensors >= 2) || 
+                           (summary.max_anomaly_score > 0.5);
+  
+  // Severity classification
+  if (summary.anomalous_sensors == 0) {
+    summary.severity = "nominal";
+  } else if (summary.max_anomaly_score < 0.2 && summary.anomalous_sensors == 1) {
+    summary.severity = "warning";
+  } else if (summary.max_anomaly_score < 0.5 && summary.anomalous_sensors < summary.total_sensors / 2) {
+    summary.severity = "warning";
+  } else {
+    summary.severity = "critical";
+  }
+  
+  return summary;
+}
 
 
 /**

@@ -82,6 +82,77 @@ public:
   };
 
   /**
+   * Anomaly detection configuration
+   */
+  struct AnomalyConfig {
+    double density_threshold = 0.05;    // 5% deviation
+    double velocity_threshold = 0.10;   // 10% deviation (velocity can be near zero)
+    double pressure_threshold = 0.05;   // 5% deviation
+    double entropy_threshold = 0.05;    // 5% deviation
+    double score_threshold = 0.1;       // Combined metric threshold
+    
+    // Weights for composite score
+    double weight_density = 1.0;
+    double weight_velocity = 0.5;
+    double weight_pressure = 1.5;       // Pressure typically most reliable
+    double weight_entropy = 1.0;        // Entropy useful for detecting non-isentropic events
+  };
+
+  /**
+   * Anomaly detection result for a single sensor
+   */
+  struct AnomalyResult {
+    double time;
+    int sensor_index;
+    double position;
+    
+    // Predicted values from simulation
+    double predicted_density;
+    double predicted_velocity;
+    double predicted_pressure;
+    double predicted_entropy;
+    
+    // Actual values from sensor
+    double actual_density;
+    double actual_velocity;
+    double actual_pressure;
+    double actual_entropy;
+    
+    // Raw residuals (predicted - actual)
+    double residual_density;
+    double residual_velocity;
+    double residual_pressure;
+    double residual_entropy;
+    
+    // Normalized residuals (absolute % error)
+    double normalized_density;
+    double normalized_velocity;
+    double normalized_pressure;
+    double normalized_entropy;
+    
+    // Overall anomaly score (weighted RMS of normalized errors)
+    double anomaly_score;
+    bool is_anomalous;
+    
+    // Which variable triggered the flag
+    std::string primary_deviation;
+  };
+
+  /**
+   * Summary of anomaly check across all sensors
+   */
+  struct AnomalySummary {
+    double time;
+    int total_sensors;
+    int anomalous_sensors;
+    double max_anomaly_score;
+    int max_score_sensor_index;
+    bool system_anomaly;           // True if multiple sensors flagged
+    std::string severity;          // "nominal", "warning", "critical"
+    std::vector<AnomalyResult> sensor_results;
+  };
+
+  /**
    * Toro test cases
    */
   enum class ToroTest {
@@ -106,7 +177,8 @@ public:
   void initializeCustom(const std::vector<PrimitiveVars>& initial);
   void initializeToroTest(ToroTest test);
   void initializeFromSparseData(const std::vector<SparseDataPoint>& sparse_data,
-                                 const std::string& interpolation_method = "linear");
+                                 const std::string& interpolation_method = "piecewise_constant",
+                                 double diaphragm_x = -1.0);
 
   /**
    * Static helper for Toro test sensor data
@@ -131,6 +203,7 @@ public:
    */
   void placeSensors(const std::vector<double>& positions);
   std::vector<SensorReading> getSensorReadings() const;
+  std::vector<SensorReading> getAnalyticalAtSensors() const;
 
   /**
    * Validation
@@ -139,6 +212,33 @@ public:
                                   std::vector<double>& u_exact,
                                   std::vector<double>& p_exact) const;
   ValidationMetrics validateAgainstAnalytical() const;
+
+  /**
+   * Anomaly Detection System
+   * 
+   * Compares predicted sensor readings from physics simulation against
+   * actual measurements to detect deviations indicating:
+   *   - Sensor faults (drift, failure, noise)
+   *   - Model errors (physics assumptions violated)
+   *   - Physical anomalies (unexpected flow behavior)
+   */
+  void setAnomalyConfig(const AnomalyConfig& config);
+  AnomalyConfig getAnomalyConfig() const { return anomaly_config_; }
+  
+  AnomalyResult compareSensorReading(
+      int sensor_idx,
+      const SensorReading& predicted,
+      const SensorReading& actual) const;
+  
+  std::vector<AnomalyResult> checkForAnomalies(
+      const std::vector<SensorReading>& actual_readings) const;
+  
+  AnomalySummary analyzeAnomalies(
+      const std::vector<SensorReading>& actual_readings) const;
+  
+  AnomalySummary analyzeAnomaliesWithReference(
+      const std::vector<SensorReading>& actual_readings,
+      const std::vector<SensorReading>& reference_readings) const;
 
   /**
    * Getters
@@ -213,6 +313,9 @@ private:
   // Sensors
   std::vector<double> sensor_positions_;
   std::vector<int> sensor_indices_;
+
+  // Anomaly detection configuration
+  AnomalyConfig anomaly_config_;
 
   // Initial conditions (for analytical solution)
   struct InitialConditions {

@@ -10,7 +10,9 @@ const ShockTubeSimulator = () => {
     CFL: 0.5,
     endTime: 0.25,
     fluxType: 'HLLC',
-    interpolation: 'piecewise_constant'
+    interpolation: 'piecewise_constant',
+    diaphragmX: 0.5,
+    autoDetectDiaphragm: false
   });
 
   // Toro test selection
@@ -39,6 +41,22 @@ const ShockTubeSimulator = () => {
   const [analyticalData, setAnalyticalData] = useState(null);
   const [validationResults, setValidationResults] = useState(null);
   const [status, setStatus] = useState({ ready: false, running: false });
+
+  // Anomaly Detection State
+  const [anomalyConfig, setAnomalyConfig] = useState({
+    density_threshold: 0.05,
+    velocity_threshold: 0.10,
+    pressure_threshold: 0.05,
+    entropy_threshold: 0.05,
+    score_threshold: 0.1,
+    weight_density: 1.0,
+    weight_velocity: 0.5,
+    weight_pressure: 1.5,
+    weight_entropy: 1.0
+  });
+  const [sensorReadings, setSensorReadings] = useState(null);
+  const [anomalyResults, setAnomalyResults] = useState(null);
+  const [activeTab, setActiveTab] = useState('validation'); // 'validation' or 'anomaly'
 
   // Canvas refs
   const densityCanvasRef = useRef(null);
@@ -75,6 +93,8 @@ const ShockTubeSimulator = () => {
     try {
       setStatus({ ready: false, running: true });
       setValidationResults(null);
+      setAnomalyResults(null);
+      setSensorReadings(null);
 
       // Reset
       await fetch(`${API_URL}/api/simulation/reset`, { method: 'POST' });
@@ -92,11 +112,18 @@ const ShockTubeSimulator = () => {
         })
       });
 
-      // Configure
+      // Configure flux
       await fetch(`${API_URL}/api/simulation/configure`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ flux: config.fluxType })
+      });
+
+      // Configure anomaly detection
+      await fetch(`${API_URL}/api/anomaly/configure`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(anomalyConfig)
       });
 
       // Initialize from sparse data
@@ -105,8 +132,16 @@ const ShockTubeSimulator = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sensors: sensors,
-          interpolation: config.interpolation
+          interpolation: config.interpolation,
+          diaphragm_x: config.autoDetectDiaphragm ? -1.0 : config.diaphragmX
         })
+      });
+
+      // Place sensors for readings
+      await fetch(`${API_URL}/api/simulation/sensors/place`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ positions: sensors.map(s => s.x) })
       });
 
       // Run
@@ -131,6 +166,42 @@ const ShockTubeSimulator = () => {
       const valData = await valResponse.json();
       if (valData.success) {
         setValidationResults(valData);
+      }
+
+      // Get sensor readings (numerical solution = "actual")
+      const readingsResponse = await fetch(`${API_URL}/api/simulation/sensors/readings`);
+      const readingsData = await readingsResponse.json();
+      
+      // Get analytical solution at sensors (exact Riemann = "predicted" ground truth)
+      const analyticalSensorsResponse = await fetch(`${API_URL}/api/simulation/sensors/analytical`);
+      const analyticalSensorsData = await analyticalSensorsResponse.json();
+      
+      if (readingsData.success && analyticalSensorsData.success) {
+        // Numerical readings are what our solver computed
+        setSensorReadings(readingsData.readings);
+        console.log('Numerical sensor readings:', readingsData.readings);
+        console.log('Analytical sensor readings:', analyticalSensorsData.readings);
+        
+        // For anomaly detection: compare numerical (actual) vs analytical (predicted)
+        // The anomaly system expects "readings" to be the actual values to compare against predictions
+        // So we pass numerical readings, and the backend compares against its internal predictions
+        // But we want: predicted = analytical, actual = numerical
+        // So we need to call analyze with numerical as "actual" and analytical as reference
+        
+        // Run anomaly analysis: numerical vs analytical
+        const analyzeResponse = await fetch(`${API_URL}/api/anomaly/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            readings: readingsData.readings,           // numerical (what we're checking)
+            reference: analyticalSensorsData.readings  // analytical (ground truth)
+          })
+        });
+        const analyzeData = await analyzeResponse.json();
+        console.log('Anomaly analysis (numerical vs analytical):', analyzeData);
+        if (analyzeData.success) {
+          setAnomalyResults(analyzeData);
+        }
       }
 
       setStatus({ ready: true, running: false });
@@ -244,23 +315,38 @@ const ShockTubeSimulator = () => {
       ctx.stroke();
     }
 
-    // Draw sensor positions
-    ctx.fillStyle = '#e74c3c';
-    for (const sensor of sensors) {
+    // Draw sensor positions with anomaly status
+    for (let i = 0; i < sensors.length; i++) {
+      const sensor = sensors[i];
       const sx = xScale(sensor.x);
+      
+      // Check if this sensor is anomalous
+      const sensorResult = anomalyResults?.sensor_results?.[i];
+      const isAnomalous = sensorResult?.is_anomalous;
+      const sensorColor = isAnomalous ? '#ef4444' : '#22c55e';
+      
       ctx.beginPath();
       ctx.moveTo(sx, padding.top);
       ctx.lineTo(sx, canvas.height - padding.bottom);
-      ctx.strokeStyle = '#e74c3c';
+      ctx.strokeStyle = sensorColor;
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
       ctx.stroke();
       ctx.setLineDash([]);
       
       // Sensor marker
+      ctx.fillStyle = sensorColor;
       ctx.beginPath();
       ctx.arc(sx, padding.top + 8, 5, 0, 2 * Math.PI);
       ctx.fill();
+      
+      // Anomaly indicator
+      if (isAnomalous) {
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('!', sx, padding.top + 25);
+      }
     }
 
     // Axis labels
@@ -320,13 +406,21 @@ const ShockTubeSimulator = () => {
     ctx.setLineDash([]);
     ctx.fillText('Analytical', legendX + 30, legendY + 29);
     
-    // Sensors
-    ctx.fillStyle = '#e74c3c';
+    // Nominal sensor
+    ctx.fillStyle = '#22c55e';
     ctx.beginPath();
     ctx.arc(legendX + 12, legendY + 50, 5, 0, 2 * Math.PI);
     ctx.fill();
     ctx.fillStyle = '#333';
-    ctx.fillText('Sensors', legendX + 30, legendY + 54);
+    ctx.fillText('Nominal', legendX + 30, legendY + 54);
+    
+    // Anomalous sensor
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.arc(legendX + 12, legendY + 70, 5, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillStyle = '#333';
+    ctx.fillText('Anomaly', legendX + 30, legendY + 74);
   };
 
   // Compute entropy from primitive variables: s = ln(p / rho^gamma)
@@ -375,13 +469,33 @@ const ShockTubeSimulator = () => {
         'Entropy (J/kg·K)', '#9333ea', '#94a3b8'
       );
     }
-  }, [numericalData, analyticalData, sensors, config.gamma]);
+  }, [numericalData, analyticalData, sensors, config.gamma, anomalyResults]);
 
   // Helper to format error values
   const formatError = (value) => {
     if (value === undefined || value === null) return '-';
     if (Math.abs(value) < 0.0001) return value.toExponential(2);
     return value.toFixed(4);
+  };
+
+  // Get severity color
+  const getSeverityColor = (severity) => {
+    switch (severity) {
+      case 'nominal': return '#22c55e';
+      case 'warning': return '#f59e0b';
+      case 'critical': return '#ef4444';
+      default: return '#64748b';
+    }
+  };
+
+  // Get severity background
+  const getSeverityBg = (severity) => {
+    switch (severity) {
+      case 'nominal': return '#f0fdf4';
+      case 'warning': return '#fffbeb';
+      case 'critical': return '#fef2f2';
+      default: return '#f8fafc';
+    }
   };
 
   const styles = {
@@ -397,7 +511,7 @@ const ShockTubeSimulator = () => {
       overflowY: 'auto'
     },
     sidebar: {
-      width: '360px',
+      width: '400px',
       backgroundColor: '#fff',
       borderLeft: '1px solid #e2e8f0',
       padding: '24px',
@@ -557,6 +671,57 @@ const ShockTubeSimulator = () => {
       borderBottom: '1px solid #f1f5f9',
       color: '#475569',
       textAlign: 'left'
+    },
+    tabs: {
+      display: 'flex',
+      gap: '4px',
+      marginBottom: '16px',
+      borderBottom: '1px solid #e2e8f0',
+      paddingBottom: '8px'
+    },
+    tab: {
+      padding: '8px 16px',
+      fontSize: '13px',
+      fontWeight: '500',
+      border: 'none',
+      borderRadius: '6px 6px 0 0',
+      cursor: 'pointer',
+      transition: 'all 0.2s'
+    },
+    tabActive: {
+      backgroundColor: '#2563eb',
+      color: '#fff'
+    },
+    tabInactive: {
+      backgroundColor: '#f1f5f9',
+      color: '#64748b'
+    },
+    severityBadge: {
+      display: 'inline-block',
+      padding: '4px 12px',
+      borderRadius: '12px',
+      fontSize: '12px',
+      fontWeight: '600',
+      textTransform: 'uppercase'
+    },
+    anomalySensorCard: {
+      padding: '12px',
+      borderRadius: '6px',
+      marginBottom: '8px',
+      border: '1px solid #e2e8f0'
+    },
+    configGrid: {
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gap: '8px',
+      marginBottom: '12px'
+    },
+    configInput: {
+      width: '100%',
+      padding: '6px 8px',
+      fontSize: '12px',
+      border: '1px solid #cbd5e1',
+      borderRadius: '4px'
     }
   };
 
@@ -565,7 +730,7 @@ const ShockTubeSimulator = () => {
       <div style={styles.main}>
         <div style={styles.header}>
           <h1 style={styles.title}>1D Shock Tube Simulator</h1>
-          <p style={styles.subtitle}>Compressible Flow Reconstruction from Sparse Telemetry</p>
+          <p style={styles.subtitle}>Compressible Flow Reconstruction & Anomaly Detection</p>
         </div>
 
         {/* Sensor Configuration */}
@@ -635,7 +800,7 @@ const ShockTubeSimulator = () => {
                   onClick={() => removeSensor(idx)}
                   disabled={sensors.length <= 2}
                 >
-                  x
+                  ×
                 </button>
               </div>
             ))}
@@ -676,7 +841,7 @@ const ShockTubeSimulator = () => {
                 onChange={(e) => setConfig({ ...config, fluxType: e.target.value })}
               >
                 <option value="HLLC">HLLC</option>
-                <option value="EntropyStable">Entropy Stable (Ismael-Roe)</option>
+                <option value="EntropyStable">Entropy Stable</option>
               </select>
             </div>
             <div>
@@ -686,9 +851,57 @@ const ShockTubeSimulator = () => {
                 value={config.interpolation}
                 onChange={(e) => setConfig({ ...config, interpolation: e.target.value })}
               >
-                <option value="piecewise_constant">Piecewise Constant</option>
-                <option value="linear">Linear</option>
+                <option value="piecewise_constant">Piecewise Constant (Recommended)</option>
+                <option value="characteristic">Characteristic-Based</option>
+                <option value="linear">Linear (Smears Shocks)</option>
               </select>
+            </div>
+            <div>
+              <div style={styles.label}>End Time</div>
+              <input
+                type="number"
+                style={{ ...styles.input, width: '100%' }}
+                value={config.endTime}
+                onChange={(e) => setConfig({ ...config, endTime: parseFloat(e.target.value) || 0.25 })}
+                step="0.01"
+              />
+            </div>
+          </div>
+
+          {/* Diaphragm Location */}
+          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '6px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+              <div style={styles.label}>Diaphragm Location</div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={config.autoDetectDiaphragm}
+                  onChange={(e) => setConfig({ ...config, autoDetectDiaphragm: e.target.checked })}
+                />
+                Auto-detect
+              </label>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <input
+                type="number"
+                style={{ 
+                  ...styles.input, 
+                  width: '100px',
+                  opacity: config.autoDetectDiaphragm ? 0.5 : 1
+                }}
+                value={config.diaphragmX}
+                onChange={(e) => setConfig({ ...config, diaphragmX: parseFloat(e.target.value) || 0.5 })}
+                step="0.05"
+                min="0"
+                max="1"
+                disabled={config.autoDetectDiaphragm}
+              />
+              <span style={{ fontSize: '12px', color: '#64748b' }}>
+                {config.autoDetectDiaphragm 
+                  ? 'Will detect from largest jump in sensor data'
+                  : `Step function at x = ${config.diaphragmX}`
+                }
+              </span>
             </div>
           </div>
 
@@ -740,71 +953,257 @@ const ShockTubeSimulator = () => {
           Analysis
         </h2>
 
-        {/* Validation Results */}
-        {validationResults && (
-          <div style={styles.sidebarSection}>
-            <div style={styles.sectionTitle}>Validation vs Analytical</div>
-            
-            {/* Error Norms Table */}
-            <div style={{ fontSize: '12px', fontWeight: '600', color: '#64748b', marginBottom: '8px' }}>
-              Error Norms
-            </div>
-            <table style={styles.errorTable}>
-              <thead>
-                <tr>
-                  <th style={styles.errorTableHeader}></th>
-                  <th style={{ ...styles.errorTableHeader, textAlign: 'right' }}>L₁</th>
-                  <th style={{ ...styles.errorTableHeader, textAlign: 'right' }}>L₂</th>
-                  <th style={{ ...styles.errorTableHeader, textAlign: 'right' }}>L∞</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={styles.errorTableCellLabel}>Density</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.L1_density)}</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.L2_density)}</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.Linf_density)}</td>
-                </tr>
-                <tr>
-                  <td style={styles.errorTableCellLabel}>Velocity</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.L1_velocity)}</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.L2_velocity)}</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.Linf_velocity)}</td>
-                </tr>
-                <tr>
-                  <td style={styles.errorTableCellLabel}>Pressure</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.L1_pressure)}</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.L2_pressure)}</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.Linf_pressure)}</td>
-                </tr>
-                <tr>
-                  <td style={styles.errorTableCellLabel}>Entropy</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.L1_entropy)}</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.L2_entropy)}</td>
-                  <td style={styles.errorTableCell}>{formatError(validationResults.Linf_entropy)}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        {/* Tabs */}
+        <div style={styles.tabs}>
+          <button
+            style={{
+              ...styles.tab,
+              ...(activeTab === 'validation' ? styles.tabActive : styles.tabInactive)
+            }}
+            onClick={() => setActiveTab('validation')}
+          >
+            Validation
+          </button>
+          <button
+            style={{
+              ...styles.tab,
+              ...(activeTab === 'anomaly' ? styles.tabActive : styles.tabInactive)
+            }}
+            onClick={() => setActiveTab('anomaly')}
+          >
+            Anomaly Detection
+          </button>
+        </div>
+
+        {activeTab === 'validation' && (
+          <>
+            {/* Validation Results */}
+            {validationResults && (
+              <div style={styles.sidebarSection}>
+                <div style={styles.sectionTitle}>Error Norms vs Analytical</div>
+                
+                <table style={styles.errorTable}>
+                  <thead>
+                    <tr>
+                      <th style={styles.errorTableHeader}></th>
+                      <th style={{ ...styles.errorTableHeader, textAlign: 'right' }}>L₁</th>
+                      <th style={{ ...styles.errorTableHeader, textAlign: 'right' }}>L₂</th>
+                      <th style={{ ...styles.errorTableHeader, textAlign: 'right' }}>L∞</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td style={styles.errorTableCellLabel}>Density</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.L1_density)}</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.L2_density)}</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.Linf_density)}</td>
+                    </tr>
+                    <tr>
+                      <td style={styles.errorTableCellLabel}>Velocity</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.L1_velocity)}</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.L2_velocity)}</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.Linf_velocity)}</td>
+                    </tr>
+                    <tr>
+                      <td style={styles.errorTableCellLabel}>Pressure</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.L1_pressure)}</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.L2_pressure)}</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.Linf_pressure)}</td>
+                    </tr>
+                    <tr>
+                      <td style={styles.errorTableCellLabel}>Entropy</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.L1_entropy)}</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.L2_entropy)}</td>
+                      <td style={styles.errorTableCell}>{formatError(validationResults.Linf_entropy)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Simulation Info */}
+            {numericalData && (
+              <div style={styles.sidebarSection}>
+                <div style={styles.sectionTitle}>Simulation Info</div>
+                <div style={styles.valueRow}>
+                  <span style={styles.valueLabel}>Time</span>
+                  <span style={styles.valueData}>{numericalData.time.toFixed(4)} s</span>
+                </div>
+                <div style={styles.valueRow}>
+                  <span style={styles.valueLabel}>Steps</span>
+                  <span style={styles.valueData}>{numericalData.step}</span>
+                </div>
+                <div style={styles.valueRow}>
+                  <span style={styles.valueLabel}>Grid Cells</span>
+                  <span style={styles.valueData}>{numericalData.numCells}</span>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
-        {/* Simulation Info */}
-        {numericalData && (
-          <div style={styles.sidebarSection}>
-            <div style={styles.sectionTitle}>Simulation Info</div>
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Time</span>
-              <span style={styles.valueData}>{numericalData.time.toFixed(4)} s</span>
+        {activeTab === 'anomaly' && (
+          <>
+            {/* Anomaly Status */}
+            {anomalyResults && (
+              <div style={styles.sidebarSection}>
+                <div style={styles.sectionTitle}>Numerical vs Analytical</div>
+                <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '12px' }}>
+                  Comparing solver output against exact Riemann solution
+                </div>
+                <div style={{
+                  ...styles.severityBadge,
+                  backgroundColor: getSeverityBg(anomalyResults.summary?.severity),
+                  color: getSeverityColor(anomalyResults.summary?.severity),
+                  marginBottom: '12px'
+                }}>
+                  {anomalyResults.summary?.severity || 'unknown'}
+                </div>
+                
+                <div style={styles.valueRow}>
+                  <span style={styles.valueLabel}>Sensors with Error</span>
+                  <span style={{
+                    ...styles.valueData,
+                    color: anomalyResults.summary?.anomalous_sensors > 0 ? '#f59e0b' : '#22c55e'
+                  }}>
+                    {anomalyResults.summary?.anomalous_sensors} / {anomalyResults.summary?.total_sensors}
+                  </span>
+                </div>
+                <div style={styles.valueRow}>
+                  <span style={styles.valueLabel}>Max Error Score</span>
+                  <span style={styles.valueData}>
+                    {anomalyResults.summary?.max_anomaly_score?.toFixed(4) || '-'}
+                  </span>
+                </div>
+                <div style={styles.valueRow}>
+                  <span style={styles.valueLabel}>Comparison Mode</span>
+                  <span style={{ ...styles.valueData, fontSize: '11px' }}>
+                    {anomalyResults.comparison_mode === 'numerical_vs_analytical' 
+                      ? 'Numerical vs Analytical' 
+                      : 'Readings vs Simulation'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Per-Sensor Results */}
+            {anomalyResults?.sensor_results && (
+              <div style={styles.sidebarSection}>
+                <div style={styles.sectionTitle}>Sensor Error Analysis</div>
+                <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '8px' }}>
+                  Shows where numerical solver deviates from exact solution
+                </div>
+                {anomalyResults.sensor_results.map((result, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      ...styles.anomalySensorCard,
+                      backgroundColor: result.is_anomalous ? '#fffbeb' : '#f0fdf4',
+                      borderColor: result.is_anomalous ? '#fde68a' : '#bbf7d0'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <span style={{ fontWeight: '600', fontSize: '13px' }}>
+                        Sensor {idx} (x={result.position?.toFixed(2)})
+                      </span>
+                      <span style={{
+                        fontSize: '11px',
+                        padding: '2px 8px',
+                        borderRadius: '10px',
+                        backgroundColor: result.is_anomalous ? '#f59e0b' : '#22c55e',
+                        color: '#fff'
+                      }}>
+                        {result.is_anomalous ? 'ERROR' : 'OK'}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#64748b' }}>
+                      Score: {result.anomaly_score?.toFixed(4)}
+                      {result.is_anomalous && result.primary_deviation !== 'none' && (
+                        <span style={{ marginLeft: '8px', color: '#f59e0b' }}>
+                          Primary: {result.primary_deviation}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#64748b', marginTop: '4px' }}>
+                      ρ: {(result.normalized_errors?.density * 100)?.toFixed(1)}% | 
+                      u: {(result.normalized_errors?.velocity * 100)?.toFixed(1)}% | 
+                      p: {(result.normalized_errors?.pressure * 100)?.toFixed(1)}% | 
+                      s: {(result.normalized_errors?.entropy * 100)?.toFixed(1)}%
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Detection Thresholds */}
+            <div style={styles.sidebarSection}>
+              <div style={styles.sectionTitle}>Detection Thresholds</div>
+              <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '8px' }}>
+                Flag sensor if error exceeds threshold
+              </div>
+              <div style={styles.configGrid}>
+                <div>
+                  <div style={{ fontSize: '10px', color: '#64748b' }}>Density</div>
+                  <input
+                    type="number"
+                    style={styles.configInput}
+                    value={anomalyConfig.density_threshold}
+                    onChange={(e) => setAnomalyConfig({ ...anomalyConfig, density_threshold: parseFloat(e.target.value) || 0.05 })}
+                    step="0.01"
+                  />
+                </div>
+                <div>
+                  <div style={{ fontSize: '10px', color: '#64748b' }}>Velocity</div>
+                  <input
+                    type="number"
+                    style={styles.configInput}
+                    value={anomalyConfig.velocity_threshold}
+                    onChange={(e) => setAnomalyConfig({ ...anomalyConfig, velocity_threshold: parseFloat(e.target.value) || 0.1 })}
+                    step="0.01"
+                  />
+                </div>
+                <div>
+                  <div style={{ fontSize: '10px', color: '#64748b' }}>Pressure</div>
+                  <input
+                    type="number"
+                    style={styles.configInput}
+                    value={anomalyConfig.pressure_threshold}
+                    onChange={(e) => setAnomalyConfig({ ...anomalyConfig, pressure_threshold: parseFloat(e.target.value) || 0.05 })}
+                    step="0.01"
+                  />
+                </div>
+                <div>
+                  <div style={{ fontSize: '10px', color: '#64748b' }}>Entropy</div>
+                  <input
+                    type="number"
+                    style={styles.configInput}
+                    value={anomalyConfig.entropy_threshold}
+                    onChange={(e) => setAnomalyConfig({ ...anomalyConfig, entropy_threshold: parseFloat(e.target.value) || 0.05 })}
+                    step="0.01"
+                  />
+                </div>
+              </div>
+              <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '8px' }}>
+                Thresholds apply on next simulation run
+              </div>
             </div>
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Steps</span>
-              <span style={styles.valueData}>{numericalData.step}</span>
+
+            {/* What This Shows */}
+            <div style={{ ...styles.sidebarSection, borderBottom: 'none' }}>
+              <div style={styles.sectionTitle}>What This Shows</div>
+              <div style={{ fontSize: '11px', color: '#64748b', lineHeight: '1.5' }}>
+                <p style={{ margin: '0 0 8px 0' }}>
+                  <strong>Numerical errors</strong> in your HLLC/MUSCL solver compared to the exact Riemann solution.
+                </p>
+                <p style={{ margin: '0 0 8px 0' }}>
+                  <strong>High errors near shocks</strong> are expected - numerical schemes smear discontinuities.
+                </p>
+                <p style={{ margin: '0' }}>
+                  <strong>Entropy errors</strong> indicate non-isentropic behavior from numerical dissipation.
+                </p>
+              </div>
             </div>
-            <div style={styles.valueRow}>
-              <span style={styles.valueLabel}>Grid Cells</span>
-              <span style={styles.valueData}>{numericalData.numCells}</span>
-            </div>
-          </div>
+          </>
         )}
 
         {/* Sensor Summary */}
@@ -822,27 +1221,6 @@ const ShockTubeSimulator = () => {
                 : '-'
               }
             </span>
-          </div>
-          <div style={styles.valueRow}>
-            <span style={styles.valueLabel}>Interpolation</span>
-            <span style={styles.valueData}>{config.interpolation === 'linear' ? 'Linear' : 'Piecewise'}</span>
-          </div>
-        </div>
-
-        {/* Configuration */}
-        <div style={styles.sidebarSection}>
-          <div style={styles.sectionTitle}>Configuration</div>
-          <div style={styles.valueRow}>
-            <span style={styles.valueLabel}>Flux</span>
-            <span style={styles.valueData}>{config.fluxType.toUpperCase()}</span>
-          </div>
-          <div style={styles.valueRow}>
-            <span style={styles.valueLabel}>CFL</span>
-            <span style={styles.valueData}>{config.CFL}</span>
-          </div>
-          <div style={styles.valueRow}>
-            <span style={styles.valueLabel}>End Time</span>
-            <span style={styles.valueData}>{config.endTime} s</span>
           </div>
         </div>
       </div>
