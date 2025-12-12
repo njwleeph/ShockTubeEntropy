@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <string>
+#include <omp.h>
 
 class ShockSolver {
 public:
@@ -35,6 +36,39 @@ public:
     double p;
 
     ConservativeVars toConservative(double gamma) const;
+  };
+
+  /**
+   * Monte Carlo results 
+   */
+  struct MonteCarloResults {
+    std::vector<double> x;    // Grid position
+
+    // Mean Values
+    std::vector<double> mean_rho;
+    std::vector<double> mean_u;
+    std::vector<double> mean_p;
+    std::vector<double> mean_entropy;
+
+    // Standard deviations
+    std::vector<double> std_rho;
+    std::vector<double> std_u;
+    std::vector<double> std_p;
+    std::vector<double> std_entropy;
+
+    // Confidence intervals 
+    std::vector<double> ci95_lower_rho, ci95_upper_rho;
+    std::vector<double> ci95_lower_u, ci95_upper_u;
+    std::vector<double> ci95_lower_p, ci95_upper_p;
+    std::vector<double> ci95_lower_s, ci95_upper_s;
+
+    std::vector<double> analytical_rho, analytical_u, analytical_p, analytical_entropy;
+    std::vector<double> sensor_x;
+
+    int num_trials;     // Number of Monte Carlo samples
+    double noise_level; // Gaussian noise std dev as fraction
+    double computation_time_ms;
+    bool success;      
   };
 
   /**
@@ -164,6 +198,14 @@ public:
   };
 
   /**
+   * Time Integration Flux Computation Types
+   */
+  enum class TimeIntegration {
+    RK2,      // New Runge-Kutta 2nd order (stable, robust)
+    HANCOCK
+  };
+
+  /**
    * Constructor
    */
   explicit ShockSolver(const Config& cfg);
@@ -191,6 +233,7 @@ public:
    * Setter
    */
   void setFlux(const std::string& flux_name);
+  void setTimeIntegration(const std::string& method);
 
   /**
    * Simulation control
@@ -239,6 +282,18 @@ public:
   AnomalySummary analyzeAnomaliesWithReference(
       const std::vector<SensorReading>& actual_readings,
       const std::vector<SensorReading>& reference_readings) const;
+
+  /**
+   * Monte Carlo Uncertainty Propogation Method
+   */
+  MonteCarloResults runMonteCarloUncertainty(
+    const std::vector<SparseDataPoint>& base_sensors,   // Nominal sensor readings without noise
+    double noise_level,                                 // Guassian noise std dev as fraction
+    int num_trials,                                     // Number of Monte Carlo samples
+    const std::string& interpolation_method,            // linear or piecewise constant methods
+    const std::string& time_integration_method,         // Either RK2 for RK2 or Hancock for MUSCL-Hancock
+    const bool include_analytical               // Whether or not to include analytical solution overlay
+  );
 
   /**
    * Getters
@@ -297,6 +352,10 @@ private:
   int step_count_;
 
   std::string flux_type_;
+  TimeIntegration time_integration_;
+
+  void stepRK2();
+  void stepHancock();
 
   // Primitive variables
   std::vector<double> rho_;

@@ -252,15 +252,19 @@ void handleConfigure(const httplib::Request& req, httplib::Response& res) {
     std::cout << "Request body: " << body.dump(1) << std::endl;
 
     std::string flux = body.value("flux", "HLLC");
+    std::string time_integration = body.value("timeIntegration", "RK2");
 
     std::cout << "Configuring: " << std::endl;
     std::cout << "  Flux: " << flux << std::endl;
+    std::cout << "  Time Integration: " << time_integration << std::endl;
 
     g_solver->setFlux(flux);
+    g_solver->setTimeIntegration(time_integration);
     std::cout << "Configuration updated" << std::endl;
 
     json response = successResponse("Configuration updated");
     response["fluxType"] = flux;
+    response["time_integration"] = time_integration;
 
     res.set_content(response.dump(), "application/json");
     std::cout << "Response sent" << std::endl;
@@ -1172,6 +1176,83 @@ void handleAnomalyInject(const httplib::Request& req, httplib::Response& res) {
 }
 
 /**
+ * POST /api/simulation/montecarlo
+ */
+void handleMonteCarlo(const httplib::Request& req, httplib::Response& res) {
+  try {
+    if (!g_solver) {
+      res.status = 400;
+      res.set_content(errorResponse("Simulation not created").dump(), "application/json");
+      return;
+    }
+
+    auto body = json::parse(req.body);
+
+    // Parse parameters
+    double noise_level = body.value("noiseLevel", 0.05);
+    int num_trials = body.value("numTrials", 100);
+    std::string interpolation = body.value("interpolation", "piecewise_constant");
+    std::string time_integration_method = body.value("timeIntegration", "RK2");
+    bool include_analytical = body.value("includeAnalytical", true);
+
+    // Parse sensor data
+    std::vector<ShockSolver::SparseDataPoint> sensors;
+    if (body.contains("sensors")) {
+      for (const auto& s : body["sensors"]) {
+        ShockSolver::SparseDataPoint point;
+        point.x = s["x"].get<double>();
+        point.rho = s["rho"].get<double>();
+        point.u = s["u"].get<double>();
+        point.p = s["p"].get<double>();
+        sensors.push_back(point);
+      }
+    }
+
+    // Run Monte Carlo
+    auto results = g_solver->runMonteCarloUncertainty(
+      sensors, noise_level, num_trials, interpolation, time_integration_method, include_analytical
+    );
+    // Build response
+    json response = successResponse("Monte Carlo completed");
+    response["x"] = results.x;
+    response["mean_rho"] = results.mean_rho;
+    response["mean_u"] = results.mean_u;
+    response["mean_p"] = results.mean_p;
+    response["mean_entropy"] = results.mean_entropy;
+    response["std_rho"] = results.std_rho;
+    response["std_u"] = results.std_u;
+    response["std_p"] = results.std_p;
+    response["std_entropy"] = results.std_entropy;
+    response["ci95_lower_rho"] = results.ci95_lower_rho;
+    response["ci95_upper_rho"] = results.ci95_upper_rho;
+    response["ci95_lower_u"] = results.ci95_lower_u;
+    response["ci95_upper_u"] = results.ci95_upper_u;
+    response["ci95_lower_p"] = results.ci95_lower_p;
+    response["ci95_upper_p"] = results.ci95_upper_p;
+    response["ci95_lower_s"] = results.ci95_lower_s;
+    response["ci95_upper_s"] = results.ci95_upper_s;
+    response["computation_time_ms"] = results.computation_time_ms;
+    response["success"] = results.success;
+    response["num_trials"] = results.num_trials;
+    response["noise_level"] = results.noise_level;
+
+    if (!results.analytical_rho.empty()) {
+      response["analytical_rho"] = results.analytical_rho;
+      response["analytical_u"] = results.analytical_u;
+      response["analytical_p"] = results.analytical_p;
+      response["analytical_entropy"] = results.analytical_entropy;
+    }
+
+    response["sensor_x"] = results.sensor_x;
+
+    res.set_content(response.dump(), "application/json");
+  } catch (const std::exception& e) {
+    res.status = 400;
+    res.set_content(errorResponse(e.what()).dump(), "application/json");
+  }
+}
+
+/**
  * GET /api/health
  */
 void handleHealth(const httplib::Request& req, httplib::Response& res) {
@@ -1230,6 +1311,9 @@ int main() {
   svr.Post("/api/anomaly/check", handleAnomalyCheck);
   svr.Post("/api/anomaly/analyze", handleAnomalyAnalyze);
   svr.Post("/api/anomaly/inject", handleAnomalyInject);
+
+  // Monte Carlo
+  svr.Post("/api/simulation/montecarlo", handleMonteCarlo);
   
   // Health check
   svr.Get("/api/health", handleHealth);
@@ -1262,6 +1346,9 @@ int main() {
   
   std::cout << "\n  === System ===" << std::endl;
   std::cout << "  GET    /api/health                    - Health check" << std::endl;
+
+  std::cout << "\n  === Monte Carlo Uncertainty Propogation ===" << std::endl;
+  std::cout << "  POST    /api/simulation/montecarlo    - Monte Carlo Uncertainty Propogation in sensor errors" << std::endl;
   
   std::cout << "\nServer starting on http://localhost:8080" << std::endl;
   std::cout << "Waiting for requests...\n" << std::endl;

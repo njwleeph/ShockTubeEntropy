@@ -111,6 +111,7 @@ shocktube_EXTERNAL_OBJECTS =
 shocktube: CMakeFiles/shocktube.dir/src/main.cpp.o
 shocktube: CMakeFiles/shocktube.dir/src/solver.cpp.o
 shocktube: CMakeFiles/shocktube.dir/build.make
+shocktube: /opt/homebrew/opt/libomp/lib/libomp.dylib
 shocktube: CMakeFiles/shocktube.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Linking CXX executable shocktube"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/shocktube.dir/link.txt --verbose=$(VERBOSE)

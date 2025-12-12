@@ -3,6 +3,10 @@
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
+#include <random>
+#include <omp.h>
+#include <vector>
+#include <chrono>
 
 /**
  * Primitive <-> Conservative conversions
@@ -24,7 +28,8 @@ ShockSolver::ShockSolver(const Config& cfg)
     dx_(cfg.length / cfg.numCells),
     t_(0.0),
     step_count_(0),
-    flux_type_("hllc") {
+    flux_type_("hllc"),
+    time_integration_(TimeIntegration::RK2) {
   
   rho_.resize(cfg_.numCells);
   u_.resize(cfg_.numCells);
@@ -150,6 +155,17 @@ void ShockSolver::setFlux(const std::string& flux_name) {
   flux_type_ = flux_name;
 }
 
+void ShockSolver::setTimeIntegration(const std::string& method) {
+  if (method == "RK2") {
+    time_integration_ = TimeIntegration::RK2;
+  } else if (method == "Hancock") {
+    time_integration_ = TimeIntegration::HANCOCK;
+  } else {
+    throw std::runtime_error("Unknown time integration: " + method);
+  }
+  std::cout << "Time integration set to " << method << std::endl; 
+}
+
 /**
  * Variable Conversions
  */
@@ -185,7 +201,7 @@ double ShockSolver::computeTimestep() const {
   return cfg_.CFL * dx_ / max_speed;
 }
 
-void ShockSolver::step() {
+void ShockSolver::stepRK2() {
   double dt = computeTimestep();
   if (t_ + dt > cfg_.endTime) dt = cfg_.endTime - t_;
 
@@ -235,6 +251,91 @@ void ShockSolver::step() {
   }
   conservativesToPrimitives();
   t_ += dt;
+}
+
+void ShockSolver::stepHancock() {
+  double dt = computeTimestep();
+  if (t_ + dt > cfg_.endTime) dt = cfg_.endTime - t_;
+
+  applyBoundaryConditions();
+
+  std::vector<double> rho_n = rho_;
+  std::vector<double> u_n = u_;
+  std::vector<double> p_n = p_;
+
+  std::vector<double> rho_half(cfg_.numCells);
+  std::vector<double> u_half(cfg_.numCells);
+  std::vector<double> p_half(cfg_.numCells);
+
+  for (int i = 0; i < cfg_.numCells; ++i) {
+    double rho_minus = (i > 0) ? rho_[i - 1] : rho_[i];
+    double rho_plus = (i < cfg_.numCells - 1) ? rho_[i + 1] : rho_[i];
+    double slope_rho = slopeLimit(rho_minus, rho_[i], rho_plus);
+
+    double u_minus = (i > 0) ? u_[i - 1] : u_[i];
+    double u_plus = (i < cfg_.numCells - 1) ? u_[i + 1] : u_[i];
+    double slope_u = slopeLimit(u_minus, u_[i], u_plus);
+
+    double p_minus = (i > 0) ? p_[i - 1] : p_[i];
+    double p_plus = (i < cfg_.numCells - 1) ? p_[i + 1] : p_[i];
+    double slope_p = slopeLimit(p_minus, p_[i], p_plus);
+
+    // Predict to t + dt / 2 using characteristic derivatives
+    double a = std::sqrt(cfg_.gamma * p_[i] / rho_[i]);
+
+    rho_half[i] = rho_[i] - 0.5 * dt * (u_[i] * slope_rho / dx_ + rho_[i] * slope_u / dx_);
+    u_half[i] = u_[i] - 0.5 * dt *(u_[i] * slope_u / dx_ + slope_p / (rho_[i] * dx_));
+    p_half[i] = p_[i] - 0.5 * dt * (cfg_.gamma * p_[i] * slope_u / dx_ + u_[i] * slope_p / dx_);
+
+    // Safety checks
+    rho_half[i] = std::max(rho_half[i], 1e-10);
+    p_half[i] = std::max(p_half[i], 1e-10);
+  }
+
+  // Corrector: Use half-step values for MUSCL reconstruction
+  rho_ = rho_half;
+  u_ = u_half;
+  p_ = p_half;
+
+  // Compute fluxes at half timestep
+  std::vector<double> F_rho(cfg_.numCells + 1);
+  std::vector<double> F_rhou(cfg_.numCells + 1);
+  std::vector<double> F_E(cfg_.numCells + 1);
+  computeFluxesMUSCL(F_rho, F_rhou, F_E);
+
+  // Restore and update to full timestep
+  for (int i = 0; i < cfg_.numCells; ++i) {
+    rho_[i] = rho_n[i] - dt * (F_rho[i + 1] - F_rho[i]) / dx_;
+    double rho_u_new = rho_n[i] * u_n[i] - dt * (F_rhou[i+1] - F_rhou[i]) / dx_;
+    
+    double e_n = p_n[i] / ((cfg_.gamma - 1.0) * rho_n[i]);
+    double E_n = rho_n[i] * (e_n + 0.5 * u_n[i] * u_n[i]);
+    double E_new = E_n - dt * (F_E[i+1] - F_E[i]) / dx_;
+    
+    // Safety
+    rho_[i] = std::max(rho_[i], 1e-10);
+    E_new = std::max(E_new, 1e-10);
+    
+    // Compute primitives
+    u_[i] = rho_u_new / rho_[i];
+    p_[i] = (cfg_.gamma - 1.0) * (E_new - 0.5 * rho_[i] * u_[i] * u_[i]);
+    p_[i] = std::max(p_[i], 1e-10);
+    
+    // Update conservative variables
+    rho_u_[i] = rho_u_new;
+    E_[i] = E_new;
+  }
+
+  t_ += dt;
+  step_count_++;
+}
+
+void ShockSolver::step() {
+  if (time_integration_ == TimeIntegration::RK2) {
+    stepRK2();
+  } else {
+    stepHancock();
+  }
 }
 
 void ShockSolver::run() {
@@ -1455,4 +1556,219 @@ ShockSolver::ValidationMetrics ShockSolver::validateAgainstAnalytical() const {
   metrics.num_points_validated = N;
 
   return metrics;
+}
+
+/**
+ * Monte Carlo Uncertainty Propogation
+ */
+ShockSolver::MonteCarloResults ShockSolver::runMonteCarloUncertainty(
+  const std::vector<SparseDataPoint>& base_sensors,
+  double noise_level,
+  int num_trials,
+  const std::string& interpolation_method,
+  const std::string& time_integration_method,
+  bool include_analytical) {
+  
+  auto start_time = std::chrono::high_resolution_clock::now();
+  MonteCarloResults results;
+
+  results.noise_level = noise_level;
+  results.num_trials = num_trials;
+  results.success = false;
+
+  const int N = cfg_.numCells;
+
+  // Pre-allocate result arrays
+  results.x.resize(N);
+  results.mean_rho.resize(N, 0.0);
+  results.mean_u.resize(N, 0.0);
+  results.mean_p.resize(N, 0.0);
+  results.mean_entropy.resize(N, 0.0);
+  results.std_rho.resize(N, 0.0);
+  results.std_u.resize(N, 0.0);
+  results.std_p.resize(N, 0.0);
+  results.std_entropy.resize(N, 0.0);
+
+  // Copy x positions
+  for (int i = 0; i < N; ++i) results.x[i] = x_[i];
+
+  // Store sensor positions for overlay
+  results.sensor_x.clear();
+  for (const auto& s : base_sensors) results.sensor_x.push_back(s.x);
+
+  // Thread-local accumulators
+  std::vector<double> sum_rho(N, 0.0), sum_u(N, 0.0), sum_p(N, 0.0), sum_s(N, 0.0);
+  std::vector<double> sum_sq_rho(N, 0.0), sum_sq_u(N, 0.0), sum_sq_p(N, 0.0), sum_sq_s(N, 0.0);
+
+  int num_threads = omp_get_max_threads();
+  std::cout << std::string('=', 50) << std::endl;
+  std::cout << "Monte Carlo Uncertainty" << std::endl;
+  std::cout << std::string('=', 50) << std::endl;
+  std::cout << "Trials: " << num_trials << std::endl;
+  std::cout << "Threads: " << num_threads << std::endl;
+  std::cout << "Noise Level: " << (noise_level * 100) << std::endl;
+  std::cout << "Grid Cells: " << N << std::endl;
+
+  int completed_trials = 0;
+
+  #pragma omp parallel
+  {
+    // Thread-local solver copy to avoid race conditions
+    ShockSolver local_solver(cfg_);
+    local_solver.setFlux(flux_type_);
+    local_solver.setTimeIntegration(time_integration_method);
+
+    // Thread-local random operator with unique seed per thread
+    std::mt19937 gen(std::random_device{}() + omp_get_thread_num() * 1000);
+
+    // Thread-local accumulators
+    std::vector<double> local_sum_rho(N, 0.0), local_sum_u(N, 0.0);
+    std::vector<double> local_sum_p(N, 0.0), local_sum_s(N, 0.0);
+    std::vector<double> local_sum_sq_rho(N, 0.0), local_sum_sq_u(N, 0.0);
+    std::vector<double> local_sum_sq_p(N, 0.0), local_sum_sq_s(N, 0.0);
+
+    #pragma omp for schedule(dynamic, 4)
+    for (int trial = 0; trial < num_trials; ++trial) {
+      // Add Gaussian noise to sensor readings
+      std::vector<SparseDataPoint> noisy_sensors = base_sensors;
+
+      for (auto& sensor : noisy_sensors) {
+        std::normal_distribution<double> noise_rho(0.0, noise_level * sensor.rho);
+        std::normal_distribution<double> noise_u(0.0, noise_level * (std::abs(sensor.u) + 0.1));
+        std::normal_distribution<double> noise_p(0.0, noise_level * sensor.p);
+
+        sensor.rho = std::max(0.01, sensor.rho + noise_rho(gen));
+        sensor.u = sensor.u + noise_u(gen);
+        sensor.p = std::max(0.01, sensor.p + noise_p(gen));
+      }
+
+      // Initialize and run simulation
+      local_solver.initializeFromSparseData(noisy_sensors, interpolation_method);
+      
+      if (initial_conditions_.is_valid) {
+        cfg_.endTime = initial_conditions_.endTime;
+        local_solver.run();
+      } else {
+        local_solver.run();
+      }
+
+      // Accumulate results
+      auto final_rho = local_solver.getDensity();
+      auto final_u = local_solver.getVelocity();
+      auto final_p = local_solver.getPressure();
+
+      for (int i = 0; i < N; ++i) {
+        double entropy = std::log(final_p[i] / std::pow(final_rho[i], cfg_.gamma));
+
+        local_sum_rho[i] += final_rho[i];
+        local_sum_u[i] += final_u[i];
+        local_sum_p[i] += final_p[i];
+        local_sum_s[i] += entropy;
+
+        local_sum_sq_rho[i] += final_rho[i] * final_rho[i];
+        local_sum_sq_u[i] += final_u[i] * final_u[i];
+        local_sum_sq_p[i] += final_p[i] * final_p[i];
+        local_sum_sq_s[i] += entropy * entropy;
+      }
+
+      #pragma omp atomic
+      completed_trials++;
+
+      if (completed_trials % (num_trials / 10 + 1) == 0) {
+        #pragma omp critical
+        {
+          std::cout << "Progress: " << completed_trials << "/" << num_trials
+                    << " (" << (100 * completed_trials / num_trials) << "%)" << std::endl;
+        }
+      }
+    }
+
+    // Reduce thread-local sums into global sums
+    #pragma omp critical
+    {
+      for (int i = 0; i < N; ++i) {
+        sum_rho[i] += local_sum_rho[i];
+        sum_u[i] += local_sum_u[i];
+        sum_p[i] += local_sum_p[i];
+        sum_s[i] += local_sum_s[i];
+        sum_sq_rho[i] += local_sum_sq_rho[i];
+        sum_sq_u[i] += local_sum_sq_u[i];
+        sum_sq_p[i] += local_sum_sq_p[i];
+        sum_sq_s[i] += local_sum_sq_s[i];
+      }
+    }
+  }
+
+  // Compute Stats
+  double n = static_cast<double>(num_trials);
+
+  for (int i = 0; i < N; ++i) {
+    // Mean
+    results.mean_rho[i] = sum_rho[i] / n;
+    results.mean_u[i] = sum_u[i] / n;
+    results.mean_p[i] = sum_p[i] / n;
+    results.mean_entropy[i] = sum_s[i] / n;
+    
+    // Variance
+    double var_rho = (sum_sq_rho[i] / n) - (results.mean_rho[i] * results.mean_rho[i]);
+    double var_u = (sum_sq_u[i] / n) - (results.mean_u[i] * results.mean_u[i]);
+    double var_p = (sum_sq_p[i] / n) - (results.mean_p[i] * results.mean_p[i]);
+    double var_s = (sum_sq_s[i] / n) - (results.mean_entropy[i] * results.mean_entropy[i]);
+
+    // Standard deviation 
+    results.std_rho[i] = std::sqrt(std::max(0.0, var_rho));
+    results.std_u[i] = std::sqrt(std::max(0.0, var_u));
+    results.std_p[i] = std::sqrt(std::max(0.0, var_p));
+    results.std_entropy[i] = std::sqrt(std::max(0.0, var_s));
+  }
+
+  // 95% Confidence Intervals
+  const double z95 = 1.996;
+  results.ci95_lower_rho.resize(N);
+  results.ci95_upper_rho.resize(N);
+  results.ci95_lower_u.resize(N);
+  results.ci95_upper_u.resize(N);
+  results.ci95_lower_p.resize(N);
+  results.ci95_upper_p.resize(N);
+  results.ci95_lower_s.resize(N);
+  results.ci95_upper_s.resize(N);
+
+  for (int i = 0; i < N; ++i) {
+    results.ci95_lower_rho[i] = results.mean_rho[i] - z95 * results.std_rho[i];
+    results.ci95_upper_rho[i] = results.mean_rho[i] + z95 * results.std_rho[i];
+    results.ci95_lower_u[i] = results.mean_u[i] - z95 * results.std_u[i];
+    results.ci95_upper_u[i] = results.mean_u[i] + z95 * results.std_u[i];
+    results.ci95_lower_p[i] = results.mean_p[i] - z95 * results.std_p[i];
+    results.ci95_upper_p[i] = results.mean_p[i] + z95 * results.std_p[i];
+    results.ci95_lower_s[i] = results.mean_entropy[i] - z95 * results.std_entropy[i];
+    results.ci95_upper_s[i] = results.mean_entropy[i] + z95 * results.std_entropy[i];
+  }
+
+  // Analytical Solution
+  if (include_analytical && initial_conditions_.is_valid) {
+    std::vector<double> rho_temp, u_temp, p_temp, s_temp;
+    computeAnalyticalSolution(rho_temp, u_temp, p_temp);
+    for (int i = 0; i < cfg_.numCells; ++i) {
+      double entropy_temp = std::log(p_temp[i] / std::pow(rho_temp[i], cfg_.gamma));
+      s_temp.push_back(entropy_temp);
+    }
+
+    results.analytical_rho = rho_temp;
+    results.analytical_u = u_temp;
+    results.analytical_p = p_temp;
+    results.analytical_entropy = s_temp;
+  }
+
+  std::cout << "Analytical solution computed" << std::endl;
+  
+  // Timing
+  auto end_time = std::chrono::high_resolution_clock::now();
+  results.computation_time_ms = std::chrono::duration<double, std::milli>(
+    end_time - start_time).count();
+  std::cout << std::string('=', 50) << std::endl;
+  std::cout << "Monte Carlo complete" << std::endl;
+  std::cout << std::string('=', 50) << std::endl;
+
+  results.success = true;
+  return results;
 }

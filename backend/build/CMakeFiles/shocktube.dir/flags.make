@@ -6,7 +6,7 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -I/Users/nathan/Desktop/ShockTube/backend/include -I/include/cpp-httplib -I/Users/nathan/Desktop/ShockTube/backend/include/json/include
 
-CXX_FLAGSarm64 = -std=gnu++17 -arch arm64
+CXX_FLAGSarm64 = -std=gnu++17 -arch arm64 -O3 -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include
 
-CXX_FLAGS = -std=gnu++17 -arch arm64
+CXX_FLAGS = -std=gnu++17 -arch arm64 -O3 -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include
 

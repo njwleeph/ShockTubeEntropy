@@ -1279,3 +1279,361 @@ events:
         
       exitCode: 0
 ...
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:251 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:558 (_OPENMP_GET_FLAGS)"
+      - "CMakeLists.txt:9 (find_package)"
+    description: "Detecting CXX OpenMP compiler info"
+    directories:
+      source: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-lnVteq"
+      binary: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-lnVteq"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "OpenMP_COMPILE_RESULT_CXX_Xclang fopenmp"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-lnVteq'
+        
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_d7705/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_d7705.dir/build.make CMakeFiles/cmTC_d7705.dir/build
+        Building CXX object CMakeFiles/cmTC_d7705.dir/OpenMPTryFlag.cpp.o
+        /usr/bin/c++   -Xclang -fopenmp -std=gnu++17 -arch arm64 -MD -MT CMakeFiles/cmTC_d7705.dir/OpenMPTryFlag.cpp.o -MF CMakeFiles/cmTC_d7705.dir/OpenMPTryFlag.cpp.o.d -o CMakeFiles/cmTC_d7705.dir/OpenMPTryFlag.cpp.o -c /Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-lnVteq/OpenMPTryFlag.cpp
+        /Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-lnVteq/OpenMPTryFlag.cpp:2:10: fatal error: 'omp.h' file not found
+            2 | #include <omp.h>
+              |          ^~~~~~~
+        1 error generated.
+        make[1]: *** [CMakeFiles/cmTC_d7705.dir/OpenMPTryFlag.cpp.o] Error 1
+        make: *** [cmTC_d7705/fast] Error 2
+        
+      exitCode: 2
+  -
+    kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:343 (find_library)"
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:558 (_OPENMP_GET_FLAGS)"
+      - "CMakeLists.txt:9 (find_package)"
+    mode: "library"
+    variable: "OpenMP_libomp_LIBRARY"
+    description: "Path to a library."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "omp"
+      - "gomp"
+      - "iomp5"
+    candidate_directories:
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift/"
+      - "/opt/homebrew/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.13/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/"
+      - "/opt/homebrew/lib/"
+      - "/opt/homebrew/"
+      - "/usr/local/"
+      - "/usr/lib/"
+      - "/usr/"
+      - "/opt/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/"
+      - "/Library/Developer/CommandLineTools/Library/Frameworks/"
+      - "/Library/Frameworks/"
+      - "/System/Library/Frameworks/"
+    searched_directories:
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift/"
+      - "/opt/homebrew/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.13/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/"
+      - "/opt/homebrew/lib/"
+      - "/opt/homebrew/"
+      - "/usr/local/"
+      - "/usr/lib/"
+      - "/usr/"
+      - "/opt/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/"
+      - "/Library/Developer/CommandLineTools/Library/Frameworks/"
+      - "/Library/Frameworks/"
+      - "/System/Library/Frameworks/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift/"
+      - "/opt/homebrew/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.13/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/"
+      - "/opt/homebrew/lib/"
+      - "/opt/homebrew/"
+      - "/usr/local/"
+      - "/usr/lib/"
+      - "/usr/"
+      - "/opt/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/"
+      - "/Library/Developer/CommandLineTools/Library/Frameworks/"
+      - "/Library/Frameworks/"
+      - "/System/Library/Frameworks/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift/"
+      - "/opt/homebrew/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.13/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.12/bin/"
+      - "/Library/Frameworks/Python.framework/Versions/3.11/bin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/"
+      - "/opt/homebrew/lib/"
+      - "/opt/homebrew/"
+      - "/usr/local/"
+      - "/usr/lib/"
+      - "/usr/"
+      - "/opt/"
+      - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/"
+      - "/Library/Developer/CommandLineTools/Library/Frameworks/"
+      - "/Library/Frameworks/"
+      - "/System/Library/Frameworks/"
+    found: false
+    search_context:
+      ENV{PATH}:
+        - "/opt/homebrew/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.13/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/opt/homebrew/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.13/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        - "/Library/Frameworks/Python.framework/Versions/3.11/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr"
+        - "/"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr/X11R6"
+        - "/usr/pkg"
+        - "/opt"
+        - "/sw"
+        - "/opt/local"
+      CMAKE_SYSTEM_LIBRARY_PATH:
+        - "/usr/lib/X11"
+      CMAKE_SYSTEM_FRAMEWORK_PATH:
+        - "~/Library/Frameworks"
+        - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Library/Frameworks"
+        - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/Network/Library/Frameworks"
+        - "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks"
+        - "/Library/Developer/CommandLineTools/Library/Frameworks"
+        - "/Library/Developer/CommandLineTools/Library/Frameworks"
+        - "/Library/Frameworks"
+        - "/Network/Library/Frameworks"
+        - "/System/Library/Frameworks"
+...
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:251 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:558 (_OPENMP_GET_FLAGS)"
+      - "CMakeLists.txt:40 (find_package)"
+    description: "Detecting CXX OpenMP compiler info"
+    directories:
+      source: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-VRGVwr"
+      binary: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-VRGVwr"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "OpenMP_COMPILE_RESULT_CXX_Xclang fopenmp"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-VRGVwr'
+        
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_4b2a8/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_4b2a8.dir/build.make CMakeFiles/cmTC_4b2a8.dir/build
+        Building CXX object CMakeFiles/cmTC_4b2a8.dir/OpenMPTryFlag.cpp.o
+        /usr/bin/c++   -Xclang -fopenmp -std=gnu++17 -arch arm64 -MD -MT CMakeFiles/cmTC_4b2a8.dir/OpenMPTryFlag.cpp.o -MF CMakeFiles/cmTC_4b2a8.dir/OpenMPTryFlag.cpp.o.d -o CMakeFiles/cmTC_4b2a8.dir/OpenMPTryFlag.cpp.o -c /Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-VRGVwr/OpenMPTryFlag.cpp
+        /Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-VRGVwr/OpenMPTryFlag.cpp:2:10: fatal error: 'omp.h' file not found
+            2 | #include <omp.h>
+              |          ^~~~~~~
+        1 error generated.
+        make[1]: *** [CMakeFiles/cmTC_4b2a8.dir/OpenMPTryFlag.cpp.o] Error 1
+        make: *** [cmTC_4b2a8/fast] Error 2
+        
+      exitCode: 2
+...
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:251 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:558 (_OPENMP_GET_FLAGS)"
+      - "CMakeLists.txt:40 (find_package)"
+    description: "Detecting CXX OpenMP compiler info"
+    directories:
+      source: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-NF0tix"
+      binary: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-NF0tix"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "OpenMP_COMPILE_RESULT_CXX_Xclang fopenmp"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-NF0tix'
+        
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_b2732/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_b2732.dir/build.make CMakeFiles/cmTC_b2732.dir/build
+        Building CXX object CMakeFiles/cmTC_b2732.dir/OpenMPTryFlag.cpp.o
+        /usr/bin/c++   -Xclang -fopenmp -std=gnu++17 -arch arm64 -MD -MT CMakeFiles/cmTC_b2732.dir/OpenMPTryFlag.cpp.o -MF CMakeFiles/cmTC_b2732.dir/OpenMPTryFlag.cpp.o.d -o CMakeFiles/cmTC_b2732.dir/OpenMPTryFlag.cpp.o -c /Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-NF0tix/OpenMPTryFlag.cpp
+        /Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-NF0tix/OpenMPTryFlag.cpp:2:10: fatal error: 'omp.h' file not found
+            2 | #include <omp.h>
+              |          ^~~~~~~
+        1 error generated.
+        make[1]: *** [CMakeFiles/cmTC_b2732.dir/OpenMPTryFlag.cpp.o] Error 1
+        make: *** [cmTC_b2732/fast] Error 2
+        
+      exitCode: 2
+...
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:492 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:632 (_OPENMP_GET_SPEC_DATE)"
+      - "CMakeLists.txt:22 (find_package)"
+    description: "Detecting CXX OpenMP version"
+    directories:
+      source: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-4CmybO"
+      binary: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-4CmybO"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "OpenMP_SPECTEST_CXX_"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-4CmybO'
+        
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_1b55d/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_1b55d.dir/build.make CMakeFiles/cmTC_1b55d.dir/build
+        Building CXX object CMakeFiles/cmTC_1b55d.dir/OpenMPCheckVersion.cpp.o
+        /usr/bin/c++   -Xpreprocessor -fopenmp -I/include -std=gnu++17 -arch arm64 -MD -MT CMakeFiles/cmTC_1b55d.dir/OpenMPCheckVersion.cpp.o -MF CMakeFiles/cmTC_1b55d.dir/OpenMPCheckVersion.cpp.o.d -o CMakeFiles/cmTC_1b55d.dir/OpenMPCheckVersion.cpp.o -c /Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-4CmybO/OpenMPCheckVersion.cpp
+        /Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-4CmybO/OpenMPCheckVersion.cpp:3:10: fatal error: 'omp.h' file not found
+            3 | #include <omp.h>
+              |          ^~~~~~~
+        1 error generated.
+        make[1]: *** [CMakeFiles/cmTC_1b55d.dir/OpenMPCheckVersion.cpp.o] Error 1
+        make: *** [cmTC_1b55d/fast] Error 2
+        
+      exitCode: 2
+...
+
+---
+events:
+  -
+    kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:492 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/FindOpenMP.cmake:632 (_OPENMP_GET_SPEC_DATE)"
+      - "CMakeLists.txt:28 (find_package)"
+    description: "Detecting CXX OpenMP version"
+    directories:
+      source: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-E2R1z5"
+      binary: "/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-E2R1z5"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: ""
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_OSX_ARCHITECTURES: ""
+      CMAKE_OSX_DEPLOYMENT_TARGET: ""
+      CMAKE_OSX_SYSROOT: ""
+    buildResult:
+      variable: "OpenMP_SPECTEST_CXX_"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-E2R1z5'
+        
+        Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_1fd61/fast
+        /Library/Developer/CommandLineTools/usr/bin/make  -f CMakeFiles/cmTC_1fd61.dir/build.make CMakeFiles/cmTC_1fd61.dir/build
+        Building CXX object CMakeFiles/cmTC_1fd61.dir/OpenMPCheckVersion.cpp.o
+        /usr/bin/c++   -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include -std=gnu++17 -arch arm64 -MD -MT CMakeFiles/cmTC_1fd61.dir/OpenMPCheckVersion.cpp.o -MF CMakeFiles/cmTC_1fd61.dir/OpenMPCheckVersion.cpp.o.d -o CMakeFiles/cmTC_1fd61.dir/OpenMPCheckVersion.cpp.o -c /Users/nathan/Desktop/ShockTube/backend/build/CMakeFiles/CMakeScratch/TryCompile-E2R1z5/OpenMPCheckVersion.cpp
+        Linking CXX executable cmTC_1fd61
+        /opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_1fd61.dir/link.txt --verbose=1
+        /usr/bin/c++  -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_1fd61.dir/OpenMPCheckVersion.cpp.o -o cmTC_1fd61
+        
+      exitCode: 0
+...
