@@ -60,4 +60,5 @@ set(CMAKE_DEPEND_INFO_FILES
   "CMakeFiles/shocktube.dir/DependInfo.cmake"
   "CMakeFiles/solver_test.dir/DependInfo.cmake"
   "CMakeFiles/toro_test.dir/DependInfo.cmake"
+  "CMakeFiles/mc_test.dir/DependInfo.cmake"
   )

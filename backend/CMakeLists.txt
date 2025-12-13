@@ -48,6 +48,10 @@ add_executable(toro_test
   src/solver.cpp
 )
 
+add_executable(mc_test
+  src/montecarlo_test.cpp
+)
+
 target_include_directories(toro_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 target_include_directories(solver_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
@@ -62,3 +66,7 @@ target_link_libraries(shocktube PRIVATE
 )
 
 target_compile_options(shocktube PRIVATE -O3)
+
+target_link_libraries(mc_test PRIVATE
+  OpenMP::OpenMP_CXX
+)

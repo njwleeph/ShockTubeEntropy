@@ -155,6 +155,19 @@ toro_test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/toro_test.dir/build.make CMakeFiles/toro_test.dir/build
 .PHONY : toro_test/fast
 
+#=============================================================================
+# Target rules for targets named mc_test
+
+# Build rule for target.
+mc_test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 mc_test
+.PHONY : mc_test
+
+# fast build rule for target.
+mc_test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mc_test.dir/build.make CMakeFiles/mc_test.dir/build
+.PHONY : mc_test/fast
+
 src/main.o: src/main.cpp.o
 .PHONY : src/main.o
 
@@ -178,6 +191,30 @@ src/main.s: src/main.cpp.s
 src/main.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/shocktube.dir/build.make CMakeFiles/shocktube.dir/src/main.cpp.s
 .PHONY : src/main.cpp.s
+
+src/montecarlo_test.o: src/montecarlo_test.cpp.o
+.PHONY : src/montecarlo_test.o
+
+# target to build an object file
+src/montecarlo_test.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mc_test.dir/build.make CMakeFiles/mc_test.dir/src/montecarlo_test.cpp.o
+.PHONY : src/montecarlo_test.cpp.o
+
+src/montecarlo_test.i: src/montecarlo_test.cpp.i
+.PHONY : src/montecarlo_test.i
+
+# target to preprocess a source file
+src/montecarlo_test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mc_test.dir/build.make CMakeFiles/mc_test.dir/src/montecarlo_test.cpp.i
+.PHONY : src/montecarlo_test.cpp.i
+
+src/montecarlo_test.s: src/montecarlo_test.cpp.s
+.PHONY : src/montecarlo_test.s
+
+# target to generate assembly for a file
+src/montecarlo_test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mc_test.dir/build.make CMakeFiles/mc_test.dir/src/montecarlo_test.cpp.s
+.PHONY : src/montecarlo_test.cpp.s
 
 src/solver.o: src/solver.cpp.o
 .PHONY : src/solver.o
@@ -265,12 +302,16 @@ help:
 	@echo "... depend"
 	@echo "... edit_cache"
 	@echo "... rebuild_cache"
+	@echo "... mc_test"
 	@echo "... shocktube"
 	@echo "... solver_test"
 	@echo "... toro_test"
 	@echo "... src/main.o"
 	@echo "... src/main.i"
 	@echo "... src/main.s"
+	@echo "... src/montecarlo_test.o"
+	@echo "... src/montecarlo_test.i"
+	@echo "... src/montecarlo_test.s"
 	@echo "... src/solver.o"
 	@echo "... src/solver.i"
 	@echo "... src/solver.s"

@@ -60,7 +60,7 @@ public:
     std::vector<double> ci95_lower_rho, ci95_upper_rho;
     std::vector<double> ci95_lower_u, ci95_upper_u;
     std::vector<double> ci95_lower_p, ci95_upper_p;
-    std::vector<double> ci95_lower_s, ci95_upper_s;
+    std::vector<double> ci95_lower_entropy, ci95_upper_entropy;
 
     std::vector<double> analytical_rho, analytical_u, analytical_p, analytical_entropy;
     std::vector<double> sensor_x;
@@ -113,77 +113,6 @@ public:
     double Linf_error_entropy;
 
     int num_points_validated;
-  };
-
-  /**
-   * Anomaly detection configuration
-   */
-  struct AnomalyConfig {
-    double density_threshold = 0.05;    // 5% deviation
-    double velocity_threshold = 0.10;   // 10% deviation (velocity can be near zero)
-    double pressure_threshold = 0.05;   // 5% deviation
-    double entropy_threshold = 0.05;    // 5% deviation
-    double score_threshold = 0.1;       // Combined metric threshold
-    
-    // Weights for composite score
-    double weight_density = 1.0;
-    double weight_velocity = 0.5;
-    double weight_pressure = 1.5;       // Pressure typically most reliable
-    double weight_entropy = 1.0;        // Entropy useful for detecting non-isentropic events
-  };
-
-  /**
-   * Anomaly detection result for a single sensor
-   */
-  struct AnomalyResult {
-    double time;
-    int sensor_index;
-    double position;
-    
-    // Predicted values from simulation
-    double predicted_density;
-    double predicted_velocity;
-    double predicted_pressure;
-    double predicted_entropy;
-    
-    // Actual values from sensor
-    double actual_density;
-    double actual_velocity;
-    double actual_pressure;
-    double actual_entropy;
-    
-    // Raw residuals (predicted - actual)
-    double residual_density;
-    double residual_velocity;
-    double residual_pressure;
-    double residual_entropy;
-    
-    // Normalized residuals (absolute % error)
-    double normalized_density;
-    double normalized_velocity;
-    double normalized_pressure;
-    double normalized_entropy;
-    
-    // Overall anomaly score (weighted RMS of normalized errors)
-    double anomaly_score;
-    bool is_anomalous;
-    
-    // Which variable triggered the flag
-    std::string primary_deviation;
-  };
-
-  /**
-   * Summary of anomaly check across all sensors
-   */
-  struct AnomalySummary {
-    double time;
-    int total_sensors;
-    int anomalous_sensors;
-    double max_anomaly_score;
-    int max_score_sensor_index;
-    bool system_anomaly;           // True if multiple sensors flagged
-    std::string severity;          // "nominal", "warning", "critical"
-    std::vector<AnomalyResult> sensor_results;
   };
 
   /**
@@ -253,7 +182,8 @@ public:
    */
   void computeAnalyticalSolution(std::vector<double>& rho_exact,
                                   std::vector<double>& u_exact,
-                                  std::vector<double>& p_exact) const;
+                                  std::vector<double>& p_exact,
+                                  std::vector<double>& entropy_exact) const;
   ValidationMetrics validateAgainstAnalytical() const;
 
   /**
@@ -263,26 +193,7 @@ public:
    * actual measurements to detect deviations indicating:
    *   - Sensor faults (drift, failure, noise)
    *   - Model errors (physics assumptions violated)
-   *   - Physical anomalies (unexpected flow behavior)
    */
-  void setAnomalyConfig(const AnomalyConfig& config);
-  AnomalyConfig getAnomalyConfig() const { return anomaly_config_; }
-  
-  AnomalyResult compareSensorReading(
-      int sensor_idx,
-      const SensorReading& predicted,
-      const SensorReading& actual) const;
-  
-  std::vector<AnomalyResult> checkForAnomalies(
-      const std::vector<SensorReading>& actual_readings) const;
-  
-  AnomalySummary analyzeAnomalies(
-      const std::vector<SensorReading>& actual_readings) const;
-  
-  AnomalySummary analyzeAnomaliesWithReference(
-      const std::vector<SensorReading>& actual_readings,
-      const std::vector<SensorReading>& reference_readings) const;
-
   /**
    * Monte Carlo Uncertainty Propogation Method
    */
@@ -291,8 +202,7 @@ public:
     double noise_level,                                 // Guassian noise std dev as fraction
     int num_trials,                                     // Number of Monte Carlo samples
     const std::string& interpolation_method,            // linear or piecewise constant methods
-    const std::string& time_integration_method,         // Either RK2 for RK2 or Hancock for MUSCL-Hancock
-    const bool include_analytical               // Whether or not to include analytical solution overlay
+    const std::string& time_integration_method         // Either RK2 for RK2 or Hancock for MUSCL-Hancock
   );
 
   /**
@@ -373,10 +283,7 @@ private:
   std::vector<double> sensor_positions_;
   std::vector<int> sensor_indices_;
 
-  // Anomaly detection configuration
-  AnomalyConfig anomaly_config_;
-
-  // Initial conditions (for analytical solution)
+  // Initial conditions (for anaalytical solution)
   struct InitialConditions {
     double rho_L, u_L, p_L;
     double rho_R, u_R, p_R;

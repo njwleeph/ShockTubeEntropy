@@ -4,9 +4,13 @@
 #include <algorithm>
 #include <stdexcept>
 #include <random>
-#include <omp.h>
 #include <vector>
 #include <chrono>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 
 /**
  * Primitive <-> Conservative conversions
@@ -43,9 +47,6 @@ ShockSolver::ShockSolver(const Config& cfg)
   }
 
   initial_conditions_.is_valid = false;
-  
-  // Initialize default anomaly config
-  anomaly_config_ = AnomalyConfig();
 }
 
 /**
@@ -782,8 +783,8 @@ std::vector<ShockSolver::SensorReading> ShockSolver::getSensorReadings() const {
  */
 std::vector<ShockSolver::SensorReading> ShockSolver::getAnalyticalAtSensors() const {
   // Get full analytical solution
-  std::vector<double> rho_exact, u_exact, p_exact;
-  computeAnalyticalSolution(rho_exact, u_exact, p_exact);
+  std::vector<double> rho_exact, u_exact, p_exact, entropy_exact;
+  computeAnalyticalSolution(rho_exact, u_exact, p_exact, entropy_exact);
   
   std::vector<SensorReading> readings;
   
@@ -795,13 +796,7 @@ std::vector<ShockSolver::SensorReading> ShockSolver::getAnalyticalAtSensors() co
     reading.density = rho_exact[idx];
     reading.velocity = u_exact[idx];
     reading.pressure = p_exact[idx];
-    
-    // Compute entropy from analytical primitive variables: s = ln(p / rho^gamma)
-    if (rho_exact[idx] > 0 && p_exact[idx] > 0) {
-      reading.entropy = std::log(p_exact[idx] / std::pow(rho_exact[idx], cfg_.gamma));
-    } else {
-      reading.entropy = 0.0;
-    }
+    reading.entropy = entropy_exact[idx];
     
     reading.time = t_;
     readings.push_back(reading);
@@ -1091,251 +1086,6 @@ void ShockSolver::initializeFromSparseData(
   std::cout << "Sparse initialization complete" << std::endl;
 }
 
-
-/**
- * ANOMALY DETECTION SYSTEM
- * 
- * Compares predicted sensor readings from physics simulation against
- * actual measurements to detect deviations indicating:
- *   - Sensor faults (drift, failure, noise)
- *   - Model errors (physics assumptions violated)
- *   - Physical anomalies (unexpected flow behavior)
- * 
- * In a real rocket engine context, this would flag:
- *   - Combustion instabilities
- *   - Feed system blockages or cavitation
- *   - Unexpected pressure transients
- *   - Sensor degradation
- */
-
-void ShockSolver::setAnomalyConfig(const AnomalyConfig& config) {
-  anomaly_config_ = config;
-}
-
-ShockSolver::AnomalyResult ShockSolver::compareSensorReading(
-    int sensor_idx,
-    const SensorReading& predicted,
-    const SensorReading& actual) const {
-  
-  AnomalyResult result;
-  result.time = actual.time;
-  result.sensor_index = sensor_idx;
-  result.position = actual.position;
-  
-  // Store both predicted and actual values for diagnostics
-  result.predicted_density = predicted.density;
-  result.predicted_velocity = predicted.velocity;
-  result.predicted_pressure = predicted.pressure;
-  result.predicted_entropy = predicted.entropy;
-  result.actual_density = actual.density;
-  result.actual_velocity = actual.velocity;
-  result.actual_pressure = actual.pressure;
-  result.actual_entropy = actual.entropy;
-  
-  // Raw residuals (predicted - actual)
-  result.residual_density = predicted.density - actual.density;
-  result.residual_velocity = predicted.velocity - actual.velocity;
-  result.residual_pressure = predicted.pressure - actual.pressure;
-  result.residual_entropy = predicted.entropy - actual.entropy;
-  
-  // Normalized residuals (absolute % error)
-  // Handle near-zero reference values carefully
-  auto safeNormalize = [](double residual, double reference, double min_ref = 1e-10) {
-    double denom = std::max(std::abs(reference), min_ref);
-    return std::abs(residual) / denom;
-  };
-  
-  result.normalized_density = safeNormalize(result.residual_density, actual.density);
-  
-  // Velocity can legitimately be zero, use a minimum scale
-  result.normalized_velocity = safeNormalize(
-      result.residual_velocity, 
-      std::max(std::abs(actual.velocity), 1.0));
-  
-  result.normalized_pressure = safeNormalize(result.residual_pressure, actual.pressure);
-  
-  // Entropy can be negative (it's log-based), use absolute value for normalization
-  result.normalized_entropy = safeNormalize(
-      result.residual_entropy,
-      std::max(std::abs(actual.entropy), 1.0));
-  
-  // Composite anomaly score (weighted RMS of normalized errors)
-  // Weights from config - pressure typically most reliable in real systems
-  double w_rho = anomaly_config_.weight_density;
-  double w_u = anomaly_config_.weight_velocity;
-  double w_p = anomaly_config_.weight_pressure;
-  double w_s = anomaly_config_.weight_entropy;
-  double sum_weights = w_rho + w_u + w_p + w_s;
-  
-  result.anomaly_score = std::sqrt(
-      (w_rho * result.normalized_density * result.normalized_density +
-       w_u * result.normalized_velocity * result.normalized_velocity +
-       w_p * result.normalized_pressure * result.normalized_pressure +
-       w_s * result.normalized_entropy * result.normalized_entropy) 
-      / sum_weights);
-  
-  // Determine if anomalous based on thresholds
-  bool rho_flag = result.normalized_density > anomaly_config_.density_threshold;
-  bool u_flag = result.normalized_velocity > anomaly_config_.velocity_threshold;
-  bool p_flag = result.normalized_pressure > anomaly_config_.pressure_threshold;
-  bool s_flag = result.normalized_entropy > anomaly_config_.entropy_threshold;
-  bool score_flag = result.anomaly_score > anomaly_config_.score_threshold;
-  
-  // Flag as anomalous if:
-  // 1. Composite score exceeds threshold, OR
-  // 2. Multiple individual thresholds exceeded (correlated fault)
-  int individual_flags = (rho_flag ? 1 : 0) + (u_flag ? 1 : 0) + (p_flag ? 1 : 0) + (s_flag ? 1 : 0);
-  result.is_anomalous = score_flag || (individual_flags >= 2);
-  
-  // Identify primary deviation source for diagnostics
-  if (result.is_anomalous) {
-    double max_norm = std::max({
-        result.normalized_density,
-        result.normalized_velocity,
-        result.normalized_pressure,
-        result.normalized_entropy
-    });
-    
-    if (max_norm == result.normalized_density) {
-      result.primary_deviation = "density";
-    } else if (max_norm == result.normalized_velocity) {
-      result.primary_deviation = "velocity";
-    } else if (max_norm == result.normalized_pressure) {
-      result.primary_deviation = "pressure";
-    } else {
-      result.primary_deviation = "entropy";
-    }
-  } else {
-    result.primary_deviation = "none";
-  }
-  
-  return result;
-}
-
-std::vector<ShockSolver::AnomalyResult> ShockSolver::checkForAnomalies(
-    const std::vector<SensorReading>& actual_readings) const {
-  
-  // Get what our simulation predicts at sensor locations
-  std::vector<SensorReading> predicted = getSensorReadings();
-  
-  if (predicted.size() != actual_readings.size()) {
-    throw std::runtime_error(
-        "Sensor count mismatch: predicted " + 
-        std::to_string(predicted.size()) + 
-        " vs actual " + 
-        std::to_string(actual_readings.size()));
-  }
-  
-  std::vector<AnomalyResult> results;
-  results.reserve(predicted.size());
-  
-  for (size_t i = 0; i < predicted.size(); ++i) {
-    results.push_back(compareSensorReading(i, predicted[i], actual_readings[i]));
-  }
-  
-  return results;
-}
-
-ShockSolver::AnomalySummary ShockSolver::analyzeAnomalies(
-    const std::vector<SensorReading>& actual_readings) const {
-  
-  AnomalySummary summary;
-  summary.time = t_;
-  summary.sensor_results = checkForAnomalies(actual_readings);
-  summary.total_sensors = static_cast<int>(summary.sensor_results.size());
-  summary.anomalous_sensors = 0;
-  summary.max_anomaly_score = 0.0;
-  summary.max_score_sensor_index = -1;
-  
-  // Analyze results
-  for (const auto& r : summary.sensor_results) {
-    if (r.is_anomalous) {
-      summary.anomalous_sensors++;
-    }
-    if (r.anomaly_score > summary.max_anomaly_score) {
-      summary.max_anomaly_score = r.anomaly_score;
-      summary.max_score_sensor_index = r.sensor_index;
-    }
-  }
-  
-  // Determine system-level anomaly status
-  // Multiple sensors flagged suggests systemic issue vs single sensor fault
-  summary.system_anomaly = (summary.anomalous_sensors >= 2) || 
-                           (summary.max_anomaly_score > 0.5);
-  
-  // Severity classification
-  if (summary.anomalous_sensors == 0) {
-    summary.severity = "nominal";
-  } else if (summary.max_anomaly_score < 0.2 && summary.anomalous_sensors == 1) {
-    summary.severity = "warning";
-  } else if (summary.max_anomaly_score < 0.5 && summary.anomalous_sensors < summary.total_sensors / 2) {
-    summary.severity = "warning";
-  } else {
-    summary.severity = "critical";
-  }
-  
-  return summary;
-}
-
-/**
- * Analyze anomalies with explicit reference readings
- * Used for comparing numerical solution against analytical solution
- * 
- * @param actual_readings - The values to check (numerical solution)
- * @param reference_readings - The ground truth to compare against (analytical solution)
- */
-ShockSolver::AnomalySummary ShockSolver::analyzeAnomaliesWithReference(
-    const std::vector<SensorReading>& actual_readings,
-    const std::vector<SensorReading>& reference_readings) const {
-  
-  if (reference_readings.size() != actual_readings.size()) {
-    throw std::runtime_error(
-        "Sensor count mismatch: reference " + 
-        std::to_string(reference_readings.size()) + 
-        " vs actual " + 
-        std::to_string(actual_readings.size()));
-  }
-  
-  AnomalySummary summary;
-  summary.time = t_;
-  summary.total_sensors = static_cast<int>(actual_readings.size());
-  summary.anomalous_sensors = 0;
-  summary.max_anomaly_score = 0.0;
-  summary.max_score_sensor_index = -1;
-  
-  // Compare each sensor: reference (analytical) = predicted, actual (numerical) = actual
-  for (size_t i = 0; i < actual_readings.size(); ++i) {
-    AnomalyResult result = compareSensorReading(i, reference_readings[i], actual_readings[i]);
-    summary.sensor_results.push_back(result);
-    
-    if (result.is_anomalous) {
-      summary.anomalous_sensors++;
-    }
-    if (result.anomaly_score > summary.max_anomaly_score) {
-      summary.max_anomaly_score = result.anomaly_score;
-      summary.max_score_sensor_index = result.sensor_index;
-    }
-  }
-  
-  // Determine system-level anomaly status
-  summary.system_anomaly = (summary.anomalous_sensors >= 2) || 
-                           (summary.max_anomaly_score > 0.5);
-  
-  // Severity classification
-  if (summary.anomalous_sensors == 0) {
-    summary.severity = "nominal";
-  } else if (summary.max_anomaly_score < 0.2 && summary.anomalous_sensors == 1) {
-    summary.severity = "warning";
-  } else if (summary.max_anomaly_score < 0.5 && summary.anomalous_sensors < summary.total_sensors / 2) {
-    summary.severity = "warning";
-  } else {
-    summary.severity = "critical";
-  }
-  
-  return summary;
-}
-
-
 /**
  * VALIDATION FRAMEWORK - Analytical Solution Comparison
  * 
@@ -1345,7 +1095,8 @@ ShockSolver::AnomalySummary ShockSolver::analyzeAnomaliesWithReference(
 
 void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
                                              std::vector<double>& u_exact,
-                                             std::vector<double>& p_exact) const {
+                                             std::vector<double>& p_exact,
+                                             std::vector<double>& entropy_exact) const {
   if (!initial_conditions_.is_valid) {
     throw std::runtime_error("Cannot compute analytical solution: initial conditions not set");
   }
@@ -1354,6 +1105,7 @@ void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
   rho_exact.resize(cfg_.numCells);
   u_exact.resize(cfg_.numCells);
   p_exact.resize(cfg_.numCells);
+  entropy_exact.resize(cfg_.numCells);
 
   // Extract initial conditions
   double rho_L = initial_conditions_.rho_L;
@@ -1481,6 +1233,9 @@ void ShockSolver::computeAnalyticalSolution(std::vector<double>& rho_exact,
     u_exact[i] = u_sample;
     p_exact[i] = p_sample;
   }
+
+  for (size_t i = 0; i < cfg_.numCells; ++i) entropy_exact[i] = std::log(p_exact[i] / std::pow(rho_exact[i], cfg_.gamma));
+  
 }
 
 /**
@@ -1496,8 +1251,8 @@ ShockSolver::ValidationMetrics ShockSolver::validateAgainstAnalytical() const {
   ValidationMetrics metrics;
 
   // Compute analytical solution
-  std::vector<double> rho_exact, u_exact, p_exact;
-  computeAnalyticalSolution(rho_exact, u_exact, p_exact);
+  std::vector<double> rho_exact, u_exact, p_exact, entropy_exact;
+  computeAnalyticalSolution(rho_exact, u_exact, p_exact, entropy_exact);
 
   // Initialize error accumulators
   double sum_rho_L1 = 0.0, sum_rho_L2 = 0.0, max_rho = 0.0;
@@ -1566,8 +1321,7 @@ ShockSolver::MonteCarloResults ShockSolver::runMonteCarloUncertainty(
   double noise_level,
   int num_trials,
   const std::string& interpolation_method,
-  const std::string& time_integration_method,
-  bool include_analytical) {
+  const std::string& time_integration_method) {
   
   auto start_time = std::chrono::high_resolution_clock::now();
   MonteCarloResults results;
@@ -1730,8 +1484,8 @@ ShockSolver::MonteCarloResults ShockSolver::runMonteCarloUncertainty(
   results.ci95_upper_u.resize(N);
   results.ci95_lower_p.resize(N);
   results.ci95_upper_p.resize(N);
-  results.ci95_lower_s.resize(N);
-  results.ci95_upper_s.resize(N);
+  results.ci95_lower_entropy.resize(N);
+  results.ci95_upper_entropy.resize(N);
 
   for (int i = 0; i < N; ++i) {
     results.ci95_lower_rho[i] = results.mean_rho[i] - z95 * results.std_rho[i];
@@ -1740,24 +1494,17 @@ ShockSolver::MonteCarloResults ShockSolver::runMonteCarloUncertainty(
     results.ci95_upper_u[i] = results.mean_u[i] + z95 * results.std_u[i];
     results.ci95_lower_p[i] = results.mean_p[i] - z95 * results.std_p[i];
     results.ci95_upper_p[i] = results.mean_p[i] + z95 * results.std_p[i];
-    results.ci95_lower_s[i] = results.mean_entropy[i] - z95 * results.std_entropy[i];
-    results.ci95_upper_s[i] = results.mean_entropy[i] + z95 * results.std_entropy[i];
+    results.ci95_lower_entropy[i] = results.mean_entropy[i] - z95 * results.std_entropy[i];
+    results.ci95_upper_entropy[i] = results.mean_entropy[i] + z95 * results.std_entropy[i];
   }
 
   // Analytical Solution
-  if (include_analytical && initial_conditions_.is_valid) {
-    std::vector<double> rho_temp, u_temp, p_temp, s_temp;
-    computeAnalyticalSolution(rho_temp, u_temp, p_temp);
-    for (int i = 0; i < cfg_.numCells; ++i) {
-      double entropy_temp = std::log(p_temp[i] / std::pow(rho_temp[i], cfg_.gamma));
-      s_temp.push_back(entropy_temp);
-    }
-
-    results.analytical_rho = rho_temp;
-    results.analytical_u = u_temp;
-    results.analytical_p = p_temp;
-    results.analytical_entropy = s_temp;
-  }
+  std::vector<double> rho_temp, u_temp, p_temp, entropy_temp;
+  computeAnalyticalSolution(rho_temp, u_temp, p_temp, entropy_temp);
+  results.analytical_rho = rho_temp;
+  results.analytical_u = u_temp;
+  results.analytical_p = p_temp;
+  results.analytical_entropy = entropy_temp;
 
   std::cout << "Analytical solution computed" << std::endl;
   
@@ -1765,9 +1512,9 @@ ShockSolver::MonteCarloResults ShockSolver::runMonteCarloUncertainty(
   auto end_time = std::chrono::high_resolution_clock::now();
   results.computation_time_ms = std::chrono::duration<double, std::milli>(
     end_time - start_time).count();
-  std::cout << std::string('=', 50) << std::endl;
+  std::cout << "=========================================" << std::endl;
   std::cout << "Monte Carlo complete" << std::endl;
-  std::cout << std::string('=', 50) << std::endl;
+  std::cout << "========================================" << std::endl;
 
   results.success = true;
   return results;
