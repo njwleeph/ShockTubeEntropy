@@ -895,6 +895,9 @@ void ShockSolver::initializeFromSparseData(
   const std::string& interpolation_method,
   double diaphragm_x) {
   
+  t_ = 0.0;
+  step_count_ = 0;
+
   if (sparse_data.empty()) {
     throw std::runtime_error("No sparse data provided");
   } 
@@ -1399,30 +1402,24 @@ ShockSolver::MonteCarloResults ShockSolver::runMonteCarloUncertainty(
       // Initialize and run simulation
       local_solver.initializeFromSparseData(noisy_sensors, interpolation_method);
       
-      if (initial_conditions_.is_valid) {
-        cfg_.endTime = initial_conditions_.endTime;
-        local_solver.run();
-      } else {
-        local_solver.run();
-      }
+      local_solver.run();
 
       // Accumulate results
       auto final_rho = local_solver.getDensity();
       auto final_u = local_solver.getVelocity();
       auto final_p = local_solver.getPressure();
+      std::vector<double> entropy = local_solver.getEntropy();
 
       for (int i = 0; i < N; ++i) {
-        double entropy = std::log(final_p[i] / std::pow(final_rho[i], cfg_.gamma));
-
         local_sum_rho[i] += final_rho[i];
         local_sum_u[i] += final_u[i];
         local_sum_p[i] += final_p[i];
-        local_sum_s[i] += entropy;
+        local_sum_s[i] += entropy[i];
 
         local_sum_sq_rho[i] += final_rho[i] * final_rho[i];
         local_sum_sq_u[i] += final_u[i] * final_u[i];
         local_sum_sq_p[i] += final_p[i] * final_p[i];
-        local_sum_sq_s[i] += entropy * entropy;
+        local_sum_sq_s[i] += entropy[i] * entropy[i];
       }
 
       #pragma omp atomic
@@ -1477,7 +1474,7 @@ ShockSolver::MonteCarloResults ShockSolver::runMonteCarloUncertainty(
   }
 
   // 95% Confidence Intervals
-  const double z95 = 1.996;
+  const double z95 = 1.96;
   results.ci95_lower_rho.resize(N);
   results.ci95_upper_rho.resize(N);
   results.ci95_lower_u.resize(N);
@@ -1499,6 +1496,7 @@ ShockSolver::MonteCarloResults ShockSolver::runMonteCarloUncertainty(
   }
 
   // Analytical Solution
+  t_ = cfg_.endTime;
   std::vector<double> rho_temp, u_temp, p_temp, entropy_temp;
   computeAnalyticalSolution(rho_temp, u_temp, p_temp, entropy_temp);
   results.analytical_rho = rho_temp;
